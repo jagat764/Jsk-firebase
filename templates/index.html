@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0f172a" />
+<title>Firebase Checker | Noob_JSK</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      fontFamily: { mono: ['ui-monospace','SFMono-Regular','Menlo','monospace'] },
+      colors: { panel: '#0b1220', panel2: '#111a2e', accent: '#22d3ee' }
+    }
+  }
+}
+</script>
+<style>
+  html, body { -webkit-tap-highlight-color: transparent; }
+  .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .log-enter { animation: fadein 0.15s ease-out; }
+  @keyframes fadein { from { opacity: 0; transform: translateY(2px);} to {opacity:1; transform:none;} }
+  input, select { font-size: 16px; } /* prevent iOS zoom on focus */
+</style>
+</head>
+<body class="min-h-full bg-slate-950 text-slate-200 font-sans antialiased">
+
+<!-- Top bar -->
+<header class="sticky top-0 z-30 backdrop-blur bg-slate-950/80 border-b border-slate-800">
+  <div class="max-w-3xl mx-auto px-4 py-3 flex items-center gap-3">
+    <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+      <svg viewBox="0 0 24 24" class="w-5 h-5 text-white" fill="currentColor">
+        <path d="M12 2l3 6-3 2-3-2 3-6zM4.5 10.5l6 4.5-6 4.5V10.5zm15 0V19.5l-6-4.5 6-4.5zM9 20l3-2 3 2-3 2-3-2z"/>
+      </svg>
+    </div>
+    <div class="flex-1 min-w-0">
+      <h1 class="font-bold text-base leading-tight truncate">Firebase Checker | Noob_JSK</h1>
+      <p class="text-[11px] text-slate-500 leading-tight flex items-center gap-1.5">
+        <span id="healthPill" class="inline-flex items-center gap-1">
+          <span class="w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+          <span id="healthText">connecting…</span>
+        </span>
+      </p>
+    </div>
+    <span id="stateBadge" class="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-slate-800 text-slate-400">idle</span>
+  </div>
+</header>
+
+<main class="max-w-3xl mx-auto px-4 pb-32 pt-4 space-y-4">
+
+  <!-- Stats grid -->
+  <section class="grid grid-cols-3 gap-2">
+    <div class="rounded-xl bg-panel border border-slate-800 p-3">
+      <div class="text-[10px] uppercase tracking-wide text-slate-500">Valid</div>
+      <div id="s-valid" class="text-xl font-bold text-emerald-400 tabular-nums">0</div>
+    </div>
+    <div class="rounded-xl bg-panel border border-slate-800 p-3">
+      <div class="text-[10px] uppercase tracking-wide text-slate-500">Empty</div>
+      <div id="s-empty" class="text-xl font-bold text-cyan-400 tabular-nums">0</div>
+    </div>
+    <div class="rounded-xl bg-panel border border-slate-800 p-3">
+      <div class="text-[10px] uppercase tracking-wide text-slate-500">Invalid</div>
+      <div id="s-invalid" class="text-xl font-bold text-yellow-400 tabular-nums">0</div>
+    </div>
+    <div class="rounded-xl bg-panel border border-slate-800 p-3">
+      <div class="text-[10px] uppercase tracking-wide text-slate-500">Private</div>
+      <div id="s-private" class="text-xl font-bold text-sky-400 tabular-nums">0</div>
+    </div>
+    <div class="rounded-xl bg-panel border border-slate-800 p-3">
+      <div class="text-[10px] uppercase tracking-wide text-slate-500">Dead</div>
+      <div id="s-dead" class="text-xl font-bold text-rose-400 tabular-nums">0</div>
+    </div>
+    <div class="rounded-xl bg-panel border border-slate-800 p-3">
+      <div class="text-[10px] uppercase tracking-wide text-slate-500">Errors</div>
+      <div id="s-errors" class="text-xl font-bold text-slate-400 tabular-nums">0</div>
+    </div>
+  </section>
+
+  <section class="grid grid-cols-3 gap-2 text-center">
+    <div class="rounded-xl bg-panel2 border border-slate-800 p-2.5">
+      <div class="text-[10px] uppercase text-slate-500">Checked</div>
+      <div id="s-processed" class="text-sm font-semibold tabular-nums">0</div>
+    </div>
+    <div class="rounded-xl bg-panel2 border border-slate-800 p-2.5">
+      <div class="text-[10px] uppercase text-slate-500">Speed</div>
+      <div id="s-speed" class="text-sm font-semibold text-cyan-400 tabular-nums">0.0/s</div>
+    </div>
+    <div class="rounded-xl bg-panel2 border border-slate-800 p-2.5">
+      <div class="text-[10px] uppercase text-slate-500">Elapsed</div>
+      <div id="s-elapsed" class="text-sm font-semibold tabular-nums">0s</div>
+    </div>
+  </section>
+
+  <!-- Config card -->
+  <section class="rounded-2xl bg-panel border border-slate-800 overflow-hidden">
+    <button id="cfgToggle" class="w-full flex items-center justify-between p-4 text-left">
+      <span class="font-semibold text-sm">Configuration</span>
+      <svg id="cfgChev" class="w-4 h-4 text-slate-500 transition-transform" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+
+    <div id="cfgBody" class="px-4 pb-4 space-y-4 border-t border-slate-800">
+
+      <!-- Telegram -->
+      <div class="pt-4">
+        <label class="flex items-center justify-between gap-3">
+          <span class="text-sm font-medium">Enable Telegram alerts</span>
+          <input id="enable_telegram" type="checkbox" class="peer sr-only" />
+          <span class="w-11 h-6 rounded-full bg-slate-700 relative peer-checked:bg-cyan-500 transition after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:w-5 after:h-5 after:bg-white after:rounded-full after:transition peer-checked:after:translate-x-5"></span>
+        </label>
+        <div id="tgFields" class="mt-3 space-y-3 hidden">
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Bot Token</label>
+            <input id="tg_token" type="text" placeholder="123456:ABC-DEF..."
+              class="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2.5 text-sm focus:outline-none focus:border-cyan-500 font-mono" />
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Chat ID</label>
+            <input id="tg_chat_id" type="text" placeholder="-1001234567890"
+              class="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2.5 text-sm focus:outline-none focus:border-cyan-500 font-mono" />
+          </div>
+          <div class="grid grid-cols-3 gap-2 pt-1">
+            <label class="flex items-center gap-2 text-xs"><input id="alert_valid" type="checkbox" checked class="accent-cyan-500"/> Valid</label>
+            <label class="flex items-center gap-2 text-xs"><input id="alert_invalid" type="checkbox" checked class="accent-cyan-500"/> Invalid</label>
+            <label class="flex items-center gap-2 text-xs"><input id="alert_private" type="checkbox" class="accent-cyan-500"/> Private</label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Log visibility -->
+      <div class="border-t border-slate-800 pt-4">
+        <div class="text-sm font-medium mb-2">Show in live log</div>
+        <div class="grid grid-cols-2 gap-2 text-sm">
+          <label class="flex items-center gap-2"><input id="show_valid" type="checkbox" checked class="accent-cyan-500"/> Valid</label>
+          <label class="flex items-center gap-2"><input id="show_empty" type="checkbox" class="accent-cyan-500"/> Empty</label>
+          <label class="flex items-center gap-2"><input id="show_invalid" type="checkbox" checked class="accent-cyan-500"/> Invalid</label>
+          <label class="flex items-center gap-2"><input id="show_private" type="checkbox" checked class="accent-cyan-500"/> Private</label>
+          <label class="flex items-center gap-2"><input id="show_dead" type="checkbox" class="accent-cyan-500"/> Dead</label>
+          <label class="flex items-center gap-2"><input id="show_errors" type="checkbox" class="accent-cyan-500"/> Errors</label>
+        </div>
+      </div>
+
+      <!-- Advanced -->
+      <div class="border-t border-slate-800 pt-4">
+        <div class="text-sm font-medium mb-2">Advanced</div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Workers</label>
+            <input id="max_workers" type="number" value="200" min="1" max="1000"
+              class="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2.5 text-sm focus:outline-none focus:border-cyan-500" />
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Timeout (s)</label>
+            <input id="timeout" type="number" value="8" min="1" max="60"
+              class="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2.5 text-sm focus:outline-none focus:border-cyan-500" />
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Batch size</label>
+            <input id="batch_size" type="number" value="5000" min="100" max="50000"
+              class="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2.5 text-sm focus:outline-none focus:border-cyan-500" />
+          </div>
+          <div>
+            <label class="block text-xs text-slate-400 mb-1">Proxy retries</label>
+            <input id="max_proxy_retries" type="number" value="1" min="0" max="10"
+              class="w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2.5 text-sm focus:outline-none focus:border-cyan-500" />
+          </div>
+        </div>
+
+        <div class="mt-3 space-y-2 text-sm">
+          <label class="flex items-center gap-2"><input id="enable_proxies" type="checkbox" checked class="accent-cyan-500"/> Use proxy rotation</label>
+          <label class="flex items-center gap-2"><input id="cumulative_output" type="checkbox" checked class="accent-cyan-500"/> Cumulative output files (keep across runs)</label>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Log -->
+  <section class="rounded-2xl bg-panel border border-slate-800 overflow-hidden">
+    <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800">
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" id="liveDot"></span>
+        <span class="font-semibold text-sm">Live Log</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <button id="clearLog" class="text-xs text-slate-400 hover:text-slate-200 px-2 py-1 rounded">Clear</button>
+        <button id="autoscrollBtn" data-on="1" class="text-xs text-cyan-400 px-2 py-1 rounded">Auto-scroll: ON</button>
+      </div>
+    </div>
+    <div id="logBox" class="h-[45vh] overflow-y-auto scrollbar-thin p-3 space-y-1 font-mono text-[12px] leading-snug bg-slate-950/40">
+      <div class="text-slate-500 italic">Waiting for logs...</div>
+    </div>
+  </section>
+
+</main>
+
+<!-- Fixed bottom action bar -->
+<div class="fixed bottom-0 inset-x-0 z-40 border-t border-slate-800 bg-slate-950/95 backdrop-blur">
+  <div class="max-w-3xl mx-auto px-4 py-3 flex items-center gap-2">
+    <button id="btnStart" class="flex-1 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-semibold py-3 text-sm shadow-lg shadow-cyan-500/20 active:scale-[.98] transition">Start</button>
+    <button id="btnPause" class="flex-1 rounded-xl bg-amber-500/90 text-slate-900 font-semibold py-3 text-sm active:scale-[.98] transition disabled:opacity-40" disabled>Pause</button>
+    <button id="btnResume" class="flex-1 rounded-xl bg-emerald-500/90 text-slate-900 font-semibold py-3 text-sm active:scale-[.98] transition disabled:opacity-40" disabled>Resume</button>
+    <button id="btnStop" class="flex-1 rounded-xl bg-rose-600 text-white font-semibold py-3 text-sm active:scale-[.98] transition disabled:opacity-40" disabled>Stop</button>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+// ---- Config collapse ----
+$("cfgToggle").addEventListener("click", () => {
+  $("cfgBody").classList.toggle("hidden");
+  $("cfgChev").classList.toggle("rotate-180");
+});
+
+// ---- Telegram fields toggle ----
+$("enable_telegram").addEventListener("change", (e) => {
+  $("tgFields").classList.toggle("hidden", !e.target.checked);
+});
+
+// ---- Log helpers ----
+const logBox = $("logBox");
+let autoscroll = true;
+$("autoscrollBtn").addEventListener("click", () => {
+  autoscroll = !autoscroll;
+  $("autoscrollBtn").dataset.on = autoscroll ? "1" : "0";
+  $("autoscrollBtn").textContent = "Auto-scroll: " + (autoscroll ? "ON" : "OFF");
+  $("autoscrollBtn").className = autoscroll
+    ? "text-xs text-cyan-400 px-2 py-1 rounded"
+    : "text-xs text-slate-500 px-2 py-1 rounded";
+});
+$("clearLog").addEventListener("click", () => { logBox.innerHTML = ""; });
+
+const colors = {
+  info: "text-slate-300",
+  ok:   "text-emerald-400",
+  warn: "text-yellow-400",
+  err:  "text-rose-400",
+};
+
+function appendLog(entry) {
+  const div = document.createElement("div");
+  div.className = "log-enter " + (colors[entry.kind] || "text-slate-300");
+  const t = new Date(entry.ts * 1000).toLocaleTimeString();
+  div.textContent = `[${t}] ${entry.text}`;
+  logBox.appendChild(div);
+  while (logBox.childElementCount > 1500) logBox.removeChild(logBox.firstChild);
+  if (autoscroll) logBox.scrollTop = logBox.scrollHeight;
+}
+
+// ============================================================
+// SSE with robust reconnect (Render restarts drop the conn)
+// ============================================================
+let es = null;
+let sseRetryTimer = null;
+let lastSeq = 0;
+
+function setHealth(dot, text) {
+  const pill = $("healthPill");
+  // update the little dot color
+  const dotEl = pill.querySelector("span:first-child");
+  if (dotEl) dotEl.className = "w-1.5 h-1.5 rounded-full " + dot;
+  $("healthText").textContent = text;
+}
+
+function connectSSE() {
+  if (es) { try { es.close(); } catch(e){} es = null; }
+  if (sseRetryTimer) { clearTimeout(sseRetryTimer); sseRetryTimer = null; }
+
+  setHealth("bg-amber-400 animate-pulse", "log: connecting…");
+  es = new EventSource("/api/logs/stream");
+
+  es.onopen = () => {
+    setHealth("bg-emerald-400", "log: connected");
+  };
+
+  es.onmessage = (ev) => {
+    try {
+      const entry = JSON.parse(ev.data);
+      // de-dupe on reconnect (server replays last 200)
+      if (entry.seq && entry.seq <= lastSeq) return;
+      lastSeq = entry.seq || lastSeq;
+      appendLog(entry);
+    } catch(e) {}
+  };
+
+  es.onerror = () => {
+    setHealth("bg-rose-400", "log: reconnecting…");
+    // EventSource auto-retries, but if it stays dead for 5s, force a fresh one
+    if (sseRetryTimer) clearTimeout(sseRetryTimer);
+    sseRetryTimer = setTimeout(() => {
+      // readyState 2 (CLOSED) means browser gave up
+      if (!es || es.readyState === 2) connectSSE();
+    }, 5000);
+  };
+}
+connectSSE();
+
+// ============================================================
+// Stats + /health polling
+// ============================================================
+function fmtNum(n){ return (n||0).toLocaleString(); }
+function fmtTime(s){
+  s = Math.floor(s || 0);
+  const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), ss = s%60;
+  return (h? h+"h ":"") + (m? m+"m ":"") + ss + "s";
+}
+
+async function pollStats() {
+  try {
+    const r = await fetch("/api/stats", { cache: "no-store" });
+    const { stats, state } = await r.json();
+    $("s-valid").textContent     = fmtNum(stats.valid);
+    $("s-empty").textContent     = fmtNum(stats.empty);
+    $("s-invalid").textContent   = fmtNum(stats.invalid);
+    $("s-private").textContent   = fmtNum(stats.private);
+    $("s-dead").textContent      = fmtNum(stats.deactivated);
+    $("s-errors").textContent    = fmtNum(stats.errors);
+    $("s-processed").textContent = fmtNum(stats.processed);
+    $("s-speed").textContent     = (stats.speed||0).toFixed(1) + "/s";
+    $("s-elapsed").textContent   = fmtTime(stats.elapsed);
+    updateState(state);
+  } catch(e) {
+    setHealth("bg-rose-400", "server unreachable");
+  }
+}
+setInterval(pollStats, 1000);
+pollStats();
+
+async function pollHealth() {
+  try {
+    const r = await fetch("/health", { cache: "no-store" });
+    const j = await r.json();
+    // server is up — indicate with a green pill unless log SSE is in a bad state
+    setHealth("bg-emerald-400", "online · " + j.state +
+              (j.checked ? " · " + fmtNum(j.checked) : ""));
+  } catch(e) {
+    setHealth("bg-rose-400", "offline");
+  }
+}
+setInterval(pollHealth, 15000);
+pollHealth();
+
+function updateState(state) {
+  const badge = $("stateBadge");
+  badge.textContent = state;
+  const map = {
+    idle:     "bg-slate-800 text-slate-400",
+    running:  "bg-emerald-500/20 text-emerald-400",
+    paused:   "bg-amber-500/20 text-amber-400",
+    stopping: "bg-rose-500/20 text-rose-400",
+  };
+  badge.className = "text-[11px] font-semibold px-2.5 py-1 rounded-full " + (map[state] || map.idle);
+
+  $("btnStart").disabled  = !(state === "idle");
+  $("btnPause").disabled  = !(state === "running");
+  $("btnResume").disabled = !(state === "paused");
+  $("btnStop").disabled   = !(state === "running" || state === "paused");
+
+  $("liveDot").className = state === "running"
+    ? "w-2 h-2 rounded-full bg-cyan-400 animate-pulse"
+    : (state === "paused"
+        ? "w-2 h-2 rounded-full bg-amber-400"
+        : "w-2 h-2 rounded-full bg-slate-600");
+}
+
+// ============================================================
+// Actions
+// ============================================================
+function collectConfig() {
+  return {
+    enable_telegram:    $("enable_telegram").checked,
+    tg_token:           $("tg_token").value.trim(),
+    tg_chat_id:         $("tg_chat_id").value.trim(),
+    alert_valid:        $("alert_valid").checked,
+    alert_invalid:      $("alert_invalid").checked,
+    alert_private:      $("alert_private").checked,
+    show_valid:         $("show_valid").checked,
+    show_empty:         $("show_empty").checked,
+    show_invalid:       $("show_invalid").checked,
+    show_private:       $("show_private").checked,
+    show_dead:          $("show_dead").checked,
+    show_errors:        $("show_errors").checked,
+    max_workers:        parseInt($("max_workers").value, 10) || 200,
+    timeout:            parseInt($("timeout").value, 10) || 8,
+    batch_size:         parseInt($("batch_size").value, 10) || 5000,
+    max_proxy_retries:  parseInt($("max_proxy_retries").value, 10) || 0,
+    enable_proxies:     $("enable_proxies").checked,
+    cumulative_output:  $("cumulative_output").checked,
+  };
+}
+
+$("btnStart").addEventListener("click", async () => {
+  const cfg = collectConfig();
+  try { localStorage.setItem("fb_checker_cfg", JSON.stringify(cfg)); } catch(e) {}
+  const r = await fetch("/api/start", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(cfg),
+  });
+  const j = await r.json();
+  if (!j.ok) alert(j.error || "Failed to start");
+  pollStats();
+});
+
+$("btnPause").addEventListener("click",  () => fetch("/api/pause",  {method:"POST"}).then(pollStats));
+$("btnResume").addEventListener("click", () => fetch("/api/resume", {method:"POST"}).then(pollStats));
+$("btnStop").addEventListener("click",   () => fetch("/api/stop",   {method:"POST"}).then(pollStats));
+
+// ============================================================
+// Load saved config from localStorage
+// ============================================================
+window.addEventListener("DOMContentLoaded", () => {
+  const saved = localStorage.getItem("fb_checker_cfg");
+  if (!saved) return;
+  try {
+    const c = JSON.parse(saved);
+    for (const k in c) {
+      const el = $(k);
+      if (!el) continue;
+      if (el.type === "checkbox") el.checked = !!c[k];
+      else el.value = c[k];
+    }
+    if ($("enable_telegram").checked) $("tgFields").classList.remove("hidden");
+  } catch(e) {}
+});
+</script>
+</body>
+              </html>
