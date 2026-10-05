@@ -1,0 +1,1 @@
+web: gunicorn -k gthread --threads 16 --timeout 120 --graceful-timeout 30 -w 1 -b 0.0.0.0:$PORT app:app

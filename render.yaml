@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: firebase-checker
+    runtime: python
+    plan: free
+    region: oregon         # or frankfurt / singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -k gthread --threads 16 --timeout 120 --graceful-timeout 30 -w 1 -b 0.0.0.0:$PORT app:app
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: OUTPUT_DIR
+        value: /tmp/fb-checker-output
+      - key: PYTHONUNBUFFERED
+        value: "1"
