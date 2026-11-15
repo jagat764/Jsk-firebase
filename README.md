@@ -11,11 +11,12 @@ no backend, every read bounded, database URL chosen at runtime.
 ```
 index.html        markup (Tailwind CDN + Material Icons, as in the original build)
 style.css         custom styles layered on top
-app.js            UI wiring, detection, rendering
-lib/detect.js     pure helpers: URLs, layout detection, normalisation
+app.js            UI wiring, loading, rendering
+lib/schema.js     the ten layout profiles, SimINFO sidecar, type detector, override
+lib/detect.js     pure helpers: URLs, normalisation, search, formatting
 lib/db.js         Realtime Database REST client
 lib/lookup.js     check-mobile client
-test/             28 unit tests (node --test)
+test/             44 unit tests (node --test)
 ```
 
 ## Running it
@@ -88,19 +89,46 @@ you deploy the folder.
 be appended as `?auth=…`; it is sent only to that database, and stored unencrypted in local
 storage.
 
-## Layout detection
+## Layout resolution (the original engine, read-only)
 
-Root keys are read shallow, then candidate device nodes are sampled and scored. The first
-candidate whose records actually carry device fields wins:
+All ten layout profiles are intact, with the same node aliases, fallbacks and detector as the
+original build — only the write path is gone.
 
-1. nested containers — `All_User/Info`, `All_Users/DeviceInfo`, `All_User/Data`
-2. flat nodes — `user_data`, `Info`, `Data`, `clients`, `devices`, `users`, …
-3. any remaining root node that is not configuration/queue data
+| Type | Layout |
+|---|---|
+| 1 | `clients` / `messages` |
+| 2 | command queue (`device_commands`) |
+| 3 | RTX (`Sim1`, `device_name`, `charge`) |
+| 4 | custom (`clients` / `users` / `accounts`) |
+| 5 | custom (`nodes` / `items` / `records`) |
+| 6 | `All_User/Info` + `All_User/SimINFO` |
+| 7 | `All_Users/DeviceInfo` |
+| 8 | `All_User/Data` + `All_User/Commands` |
+| 9 | `All_User/Info` + root `smsQueue` |
+| 10 | `user_data` + `user_sms` |
 
-`clients` and `devices` are sometimes **ping decoys** — records whose only field is
-`ping: { ts, wake }`. When every sample record is ping-only (or carries no device fields) the
-candidate is rejected and detection falls through to the real node, e.g. `user_data`. The
-rejected candidates are always reported in the Data tab.
+**Node candidates.** Each type has an ordered alias list (`lib/schema.js`), followed by the
+universal fallbacks (`All_User/Info`, `All_Users/Info`, `All_User/DeviceInfo`,
+`All_Users/DeviceInfo`, `user_data`, `clients`, `devices` for devices; `All_User/Sms`,
+`All_Users/Sms`, `Sms`, `messages`, `user_sms` for messages). The first candidate that
+actually holds records wins.
+
+**Ping decoys.** `clients` / `devices` sometimes contain only `ping: { ts, wake }` records.
+Those are skipped and the loader falls through to the real node — the skipped candidates are
+listed in the Data tab.
+
+**SimINFO sidecar.** For `All_User/Info`, `All_Users/DeviceInfo`, `All_User/Data` the SIM data
+lives in a sibling `SimINFO` node. It is read and merged per device (lookup by the record's
+`did`, then by the node key). `sim1`/`sim2` and `Sim1`/`Sim2` shapes both work.
+
+**Detection evidence.** The badge shows the detected type; the Data tab prints the evidence —
+which node supplied the devices, whether a root `smsQueue` promoted Type 6 → 9, whether the
+first record carries `Sim1`/`device_name`/`charge` (Type 3) or Aadhaar/PanCard/Dob (Type 8),
+and whether a message carries `sendSms` (Type 2).
+
+**Manual override.** The Data tab has a layout dropdown (Auto + Types 1–10). The choice is
+stored under the original `fbSchemaOverride` key, so an override carried over from the old
+build still applies, and the badge turns amber with `· manual`.
 
 Field aliases handled: `d_name` / `DeviceName` / `device_name` / `model` / `Device_info` for the
 model, `battery` / `batt` / `charge` for the level, `status` / `online` for the state, and so
@@ -116,10 +144,11 @@ size of the device read is reported. Very large databases should be split per pr
 
 ## What this panel does not do
 
-It is an inventory and read-only viewer for your own deployments. It deliberately has no
-random-URL probing or proxy rotation, no bulk phone-number extraction from arbitrary
-databases, no SMS forwarding configuration, and no remote device commands
-(`fetch sms`, `send message`). Removed in v10 — see `CHANGES.md`.
+It is an inventory and read-only viewer for your own deployments. The layout engine, the
+device/message readers and the SimINFO merge are all restored; what stays out is anything that
+*writes* or *acts*: no remote device commands (`fetch sms`, `send message`), no SMS-forwarding
+configuration, no relay/proxy tables, no bulk phone harvesting, and no random-URL probing.
+Pages only ever issue `GET`s against a database you point them at.
 
 ## Tests
 
@@ -127,10 +156,11 @@ databases, no SMS forwarding configuration, and no remote device commands
 npm test        # node --test
 ```
 
-28 assertions over URL parsing, candidate ordering, ping-decoy rejection, field/SIM
-normalisation (inline SIMs, sidecar maps, RTX keys), dead-value filtering, timestamps
-(seconds, ms, ISO, `DD/MM/YYYY`), message direction, search matching, relative time, and the
-lookup client's request shape and error handling (via a stubbed `fetch`).
+44 assertions: URL parsing, candidate ordering per layout, ping-decoy rejection, SimINFO
+sidecar mapping and merge, type detection evidence (Types 1/3/6/7/8/9/10), field/SIM
+normalisation (inline SIMs, sidecar maps, RTX `Sim1`, lowercase `sim1`), dead-value filtering,
+timestamps (seconds, ms, ISO, `DD/MM/YYYY`), message direction, search matching, relative
+time, and the lookup client's request shape and error handling (stubbed `fetch`).
 
 ## Browser notes
 

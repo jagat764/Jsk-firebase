@@ -8,7 +8,6 @@
  */
 
 import {
-    buildCandidatePaths,
     databaseLabel,
     deviceFieldScore,
     deviceIdFromMessage,
@@ -34,6 +33,16 @@ import {
 } from "./lib/db.js";
 
 import {
+    SCHEMA_NAMES,
+    detectSchemaType,
+    effectiveSchema,
+    nodeCandidates,
+    pickSidecar,
+    schemaName,
+    simSidecarPath,
+} from "./lib/schema.js";
+
+import {
     DEFAULT_LOOKUP_ENDPOINT,
     LookupError,
     checkMobile,
@@ -49,7 +58,7 @@ import {
 const STORE_KEY = "fbmp.v1";
 const MAX_DEVICES = 500;
 const MAX_MESSAGES = 800;
-const MAX_MESSAGE_DEVICES = 80;
+const MAX_MESSAGE_DEVICES = 60;
 const PER_DEVICE_MESSAGE_LIMIT = 150;
 
 function defaultStore() {
@@ -57,6 +66,7 @@ function defaultStore() {
         databases: [],
         activeUrl: "",
         lookupEnabled: false,
+        schemaOverride: null,
         lookup: { endpoint: DEFAULT_LOOKUP_ENDPOINT, token: "", initData: "" },
     };
 }
@@ -71,6 +81,10 @@ function loadStore() {
             databases: Array.isArray(parsed.databases) ? parsed.databases : [],
             activeUrl: typeof parsed.activeUrl === "string" ? parsed.activeUrl : "",
             lookupEnabled: Boolean(parsed.lookupEnabled),
+            schemaOverride:
+                Number.isInteger(parsed.schemaOverride) && parsed.schemaOverride >= 1
+                    ? parsed.schemaOverride
+                    : readSchemaOverrideKey(),
             lookup: { ...base.lookup, ...(parsed.lookup || {}) },
         };
     } catch {
@@ -80,9 +94,29 @@ function loadStore() {
 
 let store = loadStore();
 
+/** The original build kept the override under its own key — honour it. */
+function readSchemaOverrideKey() {
+    try {
+        const raw = localStorage.getItem("fbSchemaOverride");
+        const value = Number.parseInt(raw ?? "", 10);
+        return Number.isInteger(value) && value >= 1 ? value : null;
+    } catch {
+        return null;
+    }
+}
+
+function writeSchemaOverrideKey(override) {
+    try {
+        localStorage.setItem("fbSchemaOverride", override === null ? "auto" : String(override));
+    } catch {
+        /* private mode */
+    }
+}
+
 function saveStore() {
     try {
         localStorage.setItem(STORE_KEY, JSON.stringify(store));
+        writeSchemaOverrideKey(store.schemaOverride);
     } catch {
         toast("Settings could not be saved — local storage is unavailable.", "error");
     }
@@ -100,6 +134,9 @@ const runtime = {
     devices: [],
     deviceById: new Map(),
     deviceList: null,          // flat list of device ids before normalisation
+    detectedSchema: 1,
+    schemaEvidence: [],
+    commandPath: "",
     messages: [],              // aggregated, normalised, newest first
     messageIndex: new Map(),   // deviceId -> normalised messages
     messageSourceLabel: "",
@@ -231,8 +268,10 @@ async function connect(url, { silent = false } = {}) {
             runtime.deviceById.clear();
             runtime.messageIndex.clear();
             runtime.connected = true;
+            runtime.detectedSchema = 0;
+            runtime.schemaEvidence = ["database is empty"];
             setConnectionPill("ok", "EMPTY");
-            setSchemaBadge("empty");
+            renderSchemaBadge();
             setLoadStatus("Connected — database has no data at this path.");
             setProgress(100);
             renderEverything();
@@ -240,21 +279,44 @@ async function connect(url, { silent = false } = {}) {
             return true;
         }
 
-        const layout = await detectLayout(connection, probe.keys);
-        runtime.layout = layout;
+        setLoadStatus("Resolving layout…");
+        const clients = await resolveClients(connection);
+        const sidecarPath = clients.clientsPath ? simSidecarPath(clients.clientsPath) : null;
+        runtime.layout = {
+            rootKeys: probe.keys,
+            clientsPath: clients.clientsPath,
+            rawClients: clients.rawClients,
+            simsNode: clients.simsNode,
+            simsPath: sidecarPath || "",
+            skipped: clients.skipped,
+        };
         setProgress(45);
 
         setLoadStatus("Reading device records…");
         await loadDevices();
-        setProgress(70);
+        setProgress(60);
 
         setLoadStatus("Reading message logs…");
         await loadMessages();
+        setProgress(85);
+
+        setLoadStatus("Detecting layout…");
+        const commands = await probeCommandLayout(connection);
+        const firstEntry = objectEntries(clients.rawClients || {})[0];
+        const detection = detectSchemaType({
+            clientsPath: clients.clientsPath,
+            firstRecord: firstEntry ? firstEntry[1] : null,
+            messagesRecord: runtime.firstMessageRecord,
+            rootSmsQueueDetected: commands.rootSmsQueue,
+        });
+        runtime.detectedSchema = detection.type;
+        runtime.schemaEvidence = detection.evidence;
+        runtime.commandPath = commands.commandPath;
         setProgress(100);
 
         runtime.connected = true;
         setConnectionPill("ok", "LIVE");
-        setSchemaBadge(layout.devicePath || "no devices");
+        renderSchemaBadge();
         setLoadStatus(
             `Synced · ${runtime.devices.length} devices · ${runtime.messages.length} messages`,
         );
@@ -279,7 +341,9 @@ async function connect(url, { silent = false } = {}) {
         setProgress(100);
         setLoadStatus(message);
         setNotice(message, "error");
-        setSchemaBadge("no schema");
+        runtime.detectedSchema = 0;
+        runtime.schemaEvidence = [message];
+        renderSchemaBadge();
         renderEverything();
         if (!silent) toast(message, "error", 7000);
         return false;
@@ -300,232 +364,157 @@ function updateDbHeader(url) {
     })();
 }
 
-function setSchemaBadge(text) {
-    $("schemaBadge").textContent = text;
+function renderSchemaBadge() {
+    const el = $("schemaBadge");
+    const detected = runtime.detectedSchema || 1;
+    const manual = Number.isInteger(store.schemaOverride) && store.schemaOverride >= 1;
+    const active = effectiveSchema(store.schemaOverride, detected);
+    const evidence = runtime.schemaEvidence.length
+        ? runtime.schemaEvidence.join(" · ")
+        : "no evidence yet — connect a database";
+
+    el.textContent = `${schemaName(active)}${manual ? " · manual" : ""}`;
+    el.title = manual
+        ? `Manual override. Auto-detect said ${schemaName(detected)} — ${evidence}`
+        : evidence;
+    el.classList.toggle("schema-manual", manual);
 }
 
-async function detectLayout(connection, rootKeys) {
-    const childKeysByNode = {};
-    const parents = rootKeys.filter(
-        (key) => /^all_/i.test(key) || /^(root|panel|db|database)$/i.test(key),
-    );
-
-    await Promise.all(
-        parents.slice(0, 6).map(async (parent) => {
-            try {
-                childKeysByNode[parent] = Object.keys(await readShallow(connection, parent));
-            } catch {
-                childKeysByNode[parent] = [];
-            }
-        }),
-    );
-
-    const candidates = buildCandidatePaths(rootKeys, childKeysByNode);
-    const rejected = [];
-    let devicePath = null;
-
-    for (const candidate of candidates.slice(0, 8)) {
-        try {
-            const shallow = await readShallow(connection, candidate);
-            const ids = Object.keys(shallow).slice(0, 4);
-            if (ids.length === 0) continue;
-
-            const samples = await Promise.all(
-                ids.slice(0, 3).map(async (id) => {
-                    try {
-                        return (await readNode(connection, `${candidate}/${id}`)).data;
-                    } catch {
-                        return null;
-                    }
-                }),
-            );
-
-            const records = samples.filter(
-                (record) => record && typeof record === "object" && !Array.isArray(record),
-            );
-            if (records.length === 0) {
-                rejected.push(`${candidate}: no object records`);
-                continue;
-            }
-            if (isPingOnly(records)) {
-                rejected.push(`${candidate}: ping-only decoy`);
-                continue;
-            }
-            const score = records.reduce((sum, record) => sum + deviceFieldScore(record), 0);
-            if (score > 0) {
-                devicePath = candidate;
-                break;
-            }
-            rejected.push(`${candidate}: no device fields`);
-        } catch {
-            rejected.push(`${candidate}: unreadable`);
-        }
+/** Read the node list behind a path, tolerating missing nodes. */
+async function shallowKeys(connection, path) {
+    try {
+        return Object.keys(await readShallow(connection, path));
+    } catch {
+        return [];
     }
-
-    return {
-        rootKeys,
-        devicePath,
-        rejected,
-        messageSource: resolveMessageSource(rootKeys),
-    };
-}
-
-function resolveMessageSource(rootKeys) {
-    const lower = rootKeys.map((key) => key.toLowerCase());
-    const find = (names) => rootKeys[lower.findIndex((key) => names.includes(key))];
-
-    const perDevice = find(["user_sms", "user_msg", "user_messages", "user_messages_list", "sms_store"]);
-    if (perDevice) return { type: "device-map", path: perDevice };
-
-    const global = find(["messages", "sms", "all_messages", "all_sms", "message_list"]);
-    if (global) return { type: "global", path: global };
-
-    return { type: "auto", path: "" };
-}
-
-/* ==================================================================== *
- * Data loading
- * ==================================================================== */
-
-async function loadDevices() {
-    const { connection, layout } = runtime;
-    runtime.devices = [];
-    runtime.deviceById.clear();
-
-    if (!layout?.devicePath) {
-        setNotice(
-            "No device records were recognised in this database. The detected layout is shown in the Data tab.",
-            "warn",
-        );
-        return;
-    }
-
-    const { data, bytes } = await readNode(connection, layout.devicePath);
-    const entries = objectEntries(data);
-    const capped = entries.slice(0, MAX_DEVICES);
-
-    runtime.devices = capped
-        .map(([id, raw]) => normalizeDevice(raw, id))
-        .sort((a, b) => (b.lastSeen ?? 0) - (a.lastSeen ?? 0));
-    for (const device of runtime.devices) runtime.deviceById.set(device.id, device);
-
-    const notes = [`Device records at "${layout.devicePath}" (read ${formatBytes(bytes)}).`];
-    if (entries.length > MAX_DEVICES) notes.push(`Showing first ${MAX_DEVICES} of ${entries.length}.`);
-    if (layout.rejected.length) notes.push(`Skipped → ${layout.rejected.join(", ")}.`);
-    setNotice(notes.join(" "), entries.length > MAX_DEVICES ? "warn" : "info");
 }
 
 /**
- * Load every message the database exposes, with three strategies so the feed
- * is populated without having to click a device first:
- *   1. per-device map node (user_sms/<did>/<msgId>)
- *   2. a global messages/sms node (device id resolved per record)
- *   3. message nodes nested inside each device record
+ * Locate the device node exactly like the original loader: walk the candidate
+ * list for the active schema, skip ping-only decoys, keep the SimINFO sidecar
+ * when the layout stores SIM data outside the device record.
  */
-async function loadMessages({ force = false } = {}) {
-    const { connection, layout } = runtime;
-    if (!layout) return;
+async function resolveClients(connection) {
+    const candidates = nodeCandidates(store.schemaOverride, "clients");
+    const skipped = [];
+    let clientsPath = "";
+    let rawClients = null;
+    let simsNode = null;
 
+    for (const candidate of candidates.slice(0, 9)) {
+        try {
+            const { data } = await readNode(connection, candidate);
+            const entries = objectEntries(data);
+            if (!entries.length) continue;
+
+            if (isPingOnly(entries.map(([, value]) => value))) {
+                skipped.push(`${candidate}: ping-only decoy`);
+                continue;
+            }
+            const score = entries
+                .slice(0, 3)
+                .reduce((sum, [, value]) => sum + deviceFieldScore(value), 0);
+            if (score === 0) {
+                skipped.push(`${candidate}: no device fields`);
+                continue;
+            }
+
+            clientsPath = candidate;
+            rawClients = data;
+
+            const sidecarPath = simSidecarPath(candidate);
+            if (sidecarPath) {
+                try {
+                    simsNode = (await readNode(connection, sidecarPath)).data;
+                } catch {
+                    simsNode = null;
+                }
+            }
+            break;
+        } catch {
+            skipped.push(`${candidate}: unreadable`);
+        }
+    }
+
+    return { clientsPath, rawClients, simsNode, skipped };
+}
+
+/** Does this record look like a message rather than a device? */
+function looksLikeMessageRecord(record) {
+    if (!record || typeof record !== "object" || Array.isArray(record)) return false;
+    const keys = Object.keys(record).map((key) => key.toLowerCase());
+    const bodies = ["body", "message", "text", "msg", "content", "sms"];
+    const meta = ["from", "sender", "to", "address", "timestamp", "time", "date", "type"];
+    return (
+        bodies.some((key) => keys.includes(key)) ||
+        meta.filter((key) => keys.includes(key)).length >= 2
+    );
+}
+
+/**
+ * Load messages from the first candidate node that actually holds records.
+ * A global list node (message ids as keys) is read in one bounded call; a
+ * per-device map (device ids as keys) is read device by device, capped like the
+ * original build (60 devices × 150 messages).
+ */
+async function resolveMessages(connection) {
+    const candidates = nodeCandidates(store.schemaOverride, "messages");
     const collected = [];
     const seen = new Set();
+    let firstRecord = null;
+    let label = "";
+
     const add = (deviceId, list) => {
         for (const message of list) {
             const key = `${deviceId}|${message.id}|${message.ts ?? ""}`;
             if (seen.has(key)) continue;
             seen.add(key);
+            if (!firstRecord && message.raw) firstRecord = message.raw;
             collected.push({ ...message, deviceId });
         }
     };
 
-    const source = layout.messageSource || { type: "auto", path: "" };
-    let label = "";
+    for (const candidate of candidates) {
+        const keys = await shallowKeys(connection, candidate);
+        if (!keys.length) continue;
 
-    // 1 — per-device map node
-    if (source.type === "device-map") {
+        let sample = null;
         try {
-            const shallow = await readShallow(connection, source.path);
-            const ids = Object.keys(shallow);
-            const deviceIds = ids.length ? ids : runtime.devices.map((d) => d.id);
-            const batch = deviceIds.slice(0, MAX_MESSAGE_DEVICES);
-
-            const results = await Promise.all(
-                batch.map(async (deviceId) => {
-                    try {
-                        const { data } = await readNode(connection, `${source.path}/${deviceId}`, {
-                            limitToLast: PER_DEVICE_MESSAGE_LIMIT,
-                        });
-                        return [deviceId, messagePairs(data)];
-                    } catch {
-                        return [deviceId, []];
-                    }
-                }),
-            );
-
-            for (const [deviceId, pairs] of results) {
-                const device = runtime.deviceById.get(deviceId);
-                add(
-                    deviceId,
-                    pairs.map(([id, raw]) =>
-                        normalizeMessage(raw, id, { deviceNumber: device?.phoneNumber || "" }),
-                    ),
-                );
-            }
-            if (collected.length) label = source.path;
+            sample = (await readNode(connection, `${candidate}/${keys[0]}`)).data;
         } catch {
-            /* fall through to the next strategy */
+            sample = null;
         }
-    }
 
-    // 2 — global node
-    if (!collected.length && source.type !== "device-map") {
-        const candidates = [source.path, "messages", "sms", "all_messages"].filter(Boolean);
-        for (const path of candidates) {
+        if (looksLikeMessageRecord(sample)) {
             try {
-                const { data } = await readNode(connection, path, { limitToLast: MAX_MESSAGES });
-                const pairs = messagePairs(data);
-                if (!pairs.length) continue;
-
-                for (const [id, raw] of pairs) {
-                    const deviceId = deviceIdFromMessage(raw) || matchDeviceByAddress(raw);
+                const { data } = await readNode(connection, candidate, { limitToLast: MAX_MESSAGES });
+                for (const [id, raw] of messagePairs(data)) {
+                    const deviceId = deviceIdFromMessage(raw) || matchDeviceByAddress(raw) || "unassigned";
                     const device = runtime.deviceById.get(deviceId);
-                    add(
-                        deviceId || "unassigned",
-                        [
-                            normalizeMessage(raw, id, {
-                                deviceNumber: device?.phoneNumber || "",
-                            }),
-                        ],
-                    );
+                    add(deviceId, [
+                        normalizeMessage(raw, id, { deviceNumber: device?.phoneNumber || "" }),
+                    ]);
                 }
-                label = path;
-                break;
+                if (collected.length) {
+                    label = `${candidate} · global list`;
+                    break;
+                }
             } catch {
                 /* next candidate */
             }
+            continue;
         }
-    }
 
-    // 3 — nested inside each device record
-    if (!collected.length && layout.devicePath) {
-        const batch = runtime.devices.slice(0, 40);
+        const batch = keys.slice(0, MAX_MESSAGE_DEVICES);
         const results = await Promise.all(
-            batch.map(async (device) => {
+            batch.map(async (deviceId) => {
                 try {
-                    const subKeys = Object.keys(
-                        await readShallow(connection, `${layout.devicePath}/${device.id}`),
-                    );
-                    const nested = subKeys.filter((key) =>
-                        /^(sms|messages|chats|inbox|sent|outbox|message_list)$/i.test(key),
-                    );
-                    if (!nested.length) return [device.id, []];
-                    const { data } = await readNode(
-                        connection,
-                        `${layout.devicePath}/${device.id}/${nested[0]}`,
-                        { limitToLast: PER_DEVICE_MESSAGE_LIMIT },
-                    );
-                    return [device.id, messagePairs(data)];
+                    const { data } = await readNode(connection, `${candidate}/${deviceId}`, {
+                        limitToLast: PER_DEVICE_MESSAGE_LIMIT,
+                    });
+                    return [deviceId, messagePairs(data)];
                 } catch {
-                    return [device.id, []];
+                    return [deviceId, []];
                 }
             }),
         );
@@ -539,11 +528,103 @@ async function loadMessages({ force = false } = {}) {
                 ),
             );
         }
-        if (collected.length) label = `${layout.devicePath}/<id>`;
+        if (collected.length) {
+            label = `${candidate} · ${batch.length} device node(s)`;
+            break;
+        }
     }
 
-    runtime.messages = sortByTimeDesc(collected).slice(0, MAX_MESSAGES);
-    runtime.messageSourceLabel = label;
+    // Last resort — message nodes nested inside each device record.
+    if (!collected.length && runtime.layout?.clientsPath) {
+        const batch = runtime.devices.slice(0, 40);
+        const results = await Promise.all(
+            batch.map(async (device) => {
+                try {
+                    const subKeys = await shallowKeys(
+                        connection,
+                        `${runtime.layout.clientsPath}/${device.id}`,
+                    );
+                    const nested = subKeys.filter((key) =>
+                        /^(sms|messages|chats|inbox|sent|outbox|message_list)$/i.test(key),
+                    );
+                    if (!nested.length) return [device.id, []];
+                    const { data } = await readNode(
+                        connection,
+                        `${runtime.layout.clientsPath}/${device.id}/${nested[0]}`,
+                        { limitToLast: PER_DEVICE_MESSAGE_LIMIT },
+                    );
+                    return [device.id, messagePairs(data)];
+                } catch {
+                    return [device.id, []];
+                }
+            }),
+        );
+        for (const [deviceId, pairs] of results) {
+            const device = runtime.deviceById.get(deviceId);
+            add(
+                deviceId,
+                pairs.map(([id, raw]) =>
+                    normalizeMessage(raw, id, { deviceNumber: device?.phoneNumber || "" }),
+                ),
+            );
+        }
+        if (collected.length) label = `${runtime.layout.clientsPath}/<id> · nested`;
+    }
+
+    return { messages: sortByTimeDesc(collected).slice(0, MAX_MESSAGES), firstRecord, label };
+}
+
+/**
+ * Type 9 vs Type 6 hinges on whether commands live under All_User/Commands or
+ * as a root /smsQueue node. Read-only probe — nothing is written.
+ */
+async function probeCommandLayout(connection) {
+    const commands = (await shallowKeys(connection, "All_User/Commands")).length
+        ? "All_User/Commands"
+        : (await shallowKeys(connection, "All_Users/Commands")).length
+          ? "All_Users/Commands"
+          : "";
+    if (commands) return { commandPath: commands, rootSmsQueue: false };
+    const rootQueue = (await shallowKeys(connection, "smsQueue")).length > 0;
+    return { commandPath: rootQueue ? "smsQueue" : "", rootSmsQueue: rootQueue };
+}
+
+async function loadDevices() {
+    if (!runtime.layout?.clientsPath || !runtime.layout.rawClients) {
+        runtime.devices = [];
+        runtime.deviceById.clear();
+        setNotice(
+            "No device records were recognised in this database. Force a layout in the Data tab if the shape is unusual.",
+            "warn",
+        );
+        return;
+    }
+
+    const entries = objectEntries(runtime.layout.rawClients);
+    const capped = entries.slice(0, MAX_DEVICES);
+    const simsNode = runtime.layout.simsNode;
+
+    runtime.devices = capped
+        .map(([id, raw]) =>
+            normalizeDevice(raw, id, pickSidecar(simsNode, raw?.did || id, id, raw)),
+        )
+        .sort((a, b) => (b.lastSeen ?? 0) - (a.lastSeen ?? 0));
+    runtime.deviceById.clear();
+    for (const device of runtime.devices) runtime.deviceById.set(device.id, device);
+
+    const notes = [`Device records at "${runtime.layout.clientsPath}".`];
+    if (simsNode) notes.push(`SIM sidecar merged (${runtime.layout.simsPath}).`);
+    if (entries.length > MAX_DEVICES) notes.push(`Showing first ${MAX_DEVICES} of ${entries.length}.`);
+    if (runtime.layout.skipped.length) notes.push(`Skipped → ${runtime.layout.skipped.join(", ")}.`);
+    setNotice(notes.join(" "), entries.length > MAX_DEVICES ? "warn" : "info");
+}
+
+async function loadMessages() {
+    if (!runtime.layout) return;
+    const result = await resolveMessages(runtime.connection);
+    runtime.messages = result.messages;
+    runtime.messageSourceLabel = result.label;
+    runtime.firstMessageRecord = result.firstRecord;
 
     runtime.messageIndex = new Map();
     for (const message of runtime.messages) {
@@ -876,20 +957,50 @@ function renderDatabases() {
     }
 }
 
+/** Populate the layout override dropdown and show the detection evidence. */
+function renderSchemaOptions() {
+    const select = $("schemaOverrideSelect");
+    if (!select) return;
+
+    const current = Number.isInteger(store.schemaOverride) ? String(store.schemaOverride) : "auto";
+    const options = ['<option value="auto">Auto-detect</option>']
+        .concat(
+            Object.keys(SCHEMA_NAMES).map(
+                (key) => `<option value="${esc(key)}">${esc(SCHEMA_NAMES[key])}</option>`,
+            ),
+        )
+        .join("");
+    if (select.innerHTML !== options) select.innerHTML = options;
+    select.value = current;
+
+    const evidence = $("schemaEvidence");
+    if (evidence) {
+        evidence.textContent = runtime.detectedSchema
+            ? `Auto-detect: ${schemaName(runtime.detectedSchema)} — ${runtime.schemaEvidence.join(" · ")}`
+            : "Connect a database to see the detection evidence.";
+    }
+}
+
 function renderLayoutDetails() {
     const node = $("layoutDetails");
     if (!node) return;
     node.textContent = runtime.layout
         ? [
+              `layout        : ${schemaName(
+                  effectiveSchema(store.schemaOverride, runtime.detectedSchema || 1),
+              )}${Number.isInteger(store.schemaOverride) ? " (manual)" : " (auto)"}`,
+              `evidence      : ${runtime.schemaEvidence.join(" · ") || "—"}`,
               `root keys     : ${runtime.layout.rootKeys.join(", ") || "—"}`,
-              `device node   : ${runtime.layout.devicePath || "not detected"}`,
-              `message source: ${runtime.layout.messageSource.type}${
-                  runtime.layout.messageSource.path ? ` (${runtime.layout.messageSource.path})` : ""
-              }`,
-              `messages read : ${runtime.messages.length}${runtime.messageSourceLabel ? ` via ${runtime.messageSourceLabel}` : ""}`,
-              `skipped nodes : ${runtime.layout.rejected.length ? runtime.layout.rejected.join(", ") : "none"}`,
+              `device node   : ${runtime.layout.clientsPath || "not detected"}`,
+              `sim sidecar   : ${runtime.layout.simsPath || "—"}${runtime.layout.simsNode ? " (loaded)" : ""}`,
+              `message node  : ${runtime.messageSourceLabel || "not found"}`,
+              `messages read : ${runtime.messages.length}`,
+              `command node  : ${runtime.commandPath || "none"} (read-only, never written)`,
+              `skipped nodes : ${runtime.layout.skipped.length ? runtime.layout.skipped.join(", ") : "none"}`,
           ].join("\n")
         : "Connect a database to inspect its structure.";
+
+    renderSchemaOptions();
 }
 
 /* ---------------------------- device sheet -------------------------- */
@@ -1212,7 +1323,9 @@ function removeDatabase(url) {
         updateDbHeader("");
         setConnectionPill("idle", "IDLE");
         setLoadStatus("Disconnected.");
-        setSchemaBadge("no schema");
+        runtime.detectedSchema = 0;
+        runtime.schemaEvidence = [];
+        renderSchemaBadge();
         setProgress(0);
     }
     saveStore();
@@ -1271,8 +1384,13 @@ function wire() {
             exportedAt: new Date().toISOString(),
             layout: runtime.layout
                 ? {
-                      devicePath: runtime.layout.devicePath,
-                      messageSource: runtime.layout.messageSource,
+                      schema: schemaName(runtime.detectedSchema || 1),
+                      schemaDetected: runtime.detectedSchema,
+                      schemaOverride: store.schemaOverride,
+                      evidence: runtime.schemaEvidence,
+                      devicePath: runtime.layout.clientsPath,
+                      simSidecar: runtime.layout.simsPath,
+                      messageNode: runtime.messageSourceLabel,
                       rootKeys: runtime.layout.rootKeys,
                   }
                 : null,
@@ -1386,6 +1504,23 @@ function wire() {
         };
         saveStore();
         toast("Lookup settings saved in this browser.", "success", 2200);
+    });
+
+    $("schemaOverrideSelect").addEventListener("change", async (event) => {
+        const value = event.target.value;
+        store.schemaOverride = value === "auto" ? null : Number.parseInt(value, 10);
+        if (!Number.isInteger(store.schemaOverride)) store.schemaOverride = null;
+        saveStore();
+        renderSchemaBadge();
+        toast(
+            store.schemaOverride === null
+                ? "Schema override cleared — auto-detect active."
+                : `Layout forced to ${schemaName(store.schemaOverride)} — reloading.`,
+            "info",
+            2600,
+        );
+        if (runtime.activeUrl) await connect(runtime.activeUrl);
+        renderSchemaOptions();
     });
 
     // database forms (bottom tab + modal)

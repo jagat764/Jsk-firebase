@@ -65,3 +65,24 @@ more live SIMs.
   is committed.
 * Device cards, sidebar rows, JSON export and the detail sheet now share one normaliser, and
   `deviceIdFromMessage()` is unit-tested alongside the rest (29 assertions).
+
+## v10.2 — original layout engine restored
+
+The read-only half of the original logic is back, unchanged in behaviour:
+
+* **Ten layout profiles** with their exact alias lists (`lib/schema.js`), plus the universal
+  fallbacks the loader used — `All_User/Info`, `All_Users/Info`, `All_User/DeviceInfo`,
+  `All_Users/DeviceInfo`, `user_data`, `clients`, `devices`; `All_User/Sms`, `All_Users/Sms`,
+  `Sms`, `messages`, `user_sms`.
+* **SimINFO sidecar** — `All_User/Info` → `All_User/SimINFO` (same rule for `All_Users/*` and
+  `Data`), merged per device by `did` then node key. `sim1`/`sim2` and `Sim1`/`Sim2` both read.
+* **Evidence-based detection** — node path decides the family, root `/smsQueue` promotes
+  Type 6 → 9, record fields refine Type 3 (RTX) and Type 8 (Aadhaar/PanCard/Dob), `sendSms`
+  messages mean Type 2. Evidence is printed in the Data tab and in the badge tooltip.
+* **Manual override** — Auto + Types 1–10 dropdown, stored under the original
+  `fbSchemaOverride` key so an old override still applies; badge turns amber with `· manual`.
+* **Ping-only decoys** still skipped, with the rejected candidates listed.
+* **Bounded message reads** kept at the original limits (60 device nodes × 150 messages).
+
+Still absent by design: device command dispatch, SMS forwarding config, relay/proxy tables,
+bulk number harvesting and URL probing. The panel only issues `GET`s.
