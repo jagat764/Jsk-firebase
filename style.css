@@ -298,3 +298,10 @@
     white-space: pre-wrap;
     word-break: break-word;
 }
+
+/* manual layout override badge (mirrors the original amber state) */
+.schema-manual {
+    color: #fbbf24 !important;
+    border-color: rgba(245, 158, 11, 0.4) !important;
+    background: rgba(245, 158, 11, 0.08);
+}

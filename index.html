@@ -225,6 +225,18 @@
                     <h3 class="section-title px-1 pt-1">Saved Databases</h3>
                     <div id="dbListContainer" class="space-y-2"></div>
 
+                    <h3 class="section-title px-1 pt-1">Layout Override</h3>
+                    <div class="bg-slate-900/60 border border-slate-900 rounded-xl p-3 space-y-2">
+                        <div class="text-[9px] font-mono text-slate-500 leading-relaxed">
+                            Auto-detect picks the layout from the node paths and record fields. Force one when a
+                            database uses an unusual shape — the choice is remembered in this browser.
+                        </div>
+                        <select id="schemaOverrideSelect" class="input-element">
+                            <option value="auto">Auto-detect</option>
+                        </select>
+                        <div id="schemaEvidence" class="text-[9px] font-mono text-slate-600 leading-relaxed"></div>
+                    </div>
+
                     <h3 class="section-title px-1 pt-1">Detected Layout</h3>
                     <div class="table-frame">
                         <pre id="layoutDetails" class="p-3 text-[10px] font-mono text-slate-400 whitespace-pre-wrap break-words">Connect a database to inspect its structure.</pre>
