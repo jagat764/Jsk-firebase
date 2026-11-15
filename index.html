@@ -1,268 +1,363 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <meta name="color-scheme" content="dark">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#020617">
-    <title>Firebase Manager Pro</title>
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2306b6d4'/%3E%3Ctext x='16' y='21' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%2302151d'%3EFB%3C/text%3E%3C/svg%3E">
+    <title>Matrix Command — Firebase Manager Pro</title>
+    <!-- Tailwind CSS CDN (same as the original build) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Material Icons -->
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2306b6d4'/%3E%3Ctext x='16' y='21' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%2302151d'%3EMC%3C/text%3E%3C/svg%3E">
     <link rel="stylesheet" href="style.css">
 </head>
-<body>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col selection:bg-cyan-500/30 overflow-y-auto custom-scrollbar">
 
-<header class="app-header">
-    <div class="header-row">
-        <div class="brand">
-            <span class="brand-mark" aria-hidden="true">FB</span>
-            <div class="brand-text">
-                <h1>Firebase Manager Pro</h1>
-                <button id="connectionPill" class="connection-pill" type="button" title="Manage databases">
-                    <span class="dot dot-idle" id="connectionDot"></span>
-                    <span id="connectionLabel">not connected</span>
+    <!-- ============================ HEADER ============================ -->
+    <header class="bg-slate-900/90 backdrop-blur-md border-b border-slate-800 px-4 py-3 flex items-center justify-between shadow-md z-40 sticky top-0">
+        <div class="flex items-center space-x-2.5">
+            <button id="menuDrawerToggleBtn" class="p-2 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-center text-cyan-400 active:scale-95 transition-all" title="Open device list">
+                <span class="material-icons text-lg">tune</span>
+            </button>
+            <div class="leading-tight">
+                <h1 class="text-xs font-black tracking-widest text-slate-100">MATRIX<span class="text-cyan-400">COMMAND</span></h1>
+                <p id="currentSelectionLabel" class="text-[9px] text-slate-400 uppercase tracking-wider font-mono font-bold">Scope: Global View</p>
+            </div>
+        </div>
+
+        <div class="flex items-center space-x-2">
+            <button id="lookupToggleBtn" class="lookup-toggle" aria-pressed="false" title="Show a lookup button on every device card">
+                <span class="material-icons text-sm">travel_explore</span>
+                <span class="lookup-toggle-label">Lookup</span>
+                <span class="lookup-toggle-track"><span class="lookup-toggle-thumb"></span></span>
+            </button>
+            <button id="globalSearchBtn" class="p-2 bg-slate-950 hover:bg-slate-900 border border-slate-800 text-slate-300 rounded-xl active:scale-95 transition-all flex items-center" title="Search all devices and messages">
+                <span class="material-icons text-sm">search</span>
+            </button>
+            <button id="openDbManagerBtn" class="flex items-center gap-1.5 bg-slate-950 hover:bg-slate-900 border border-slate-800 rounded-xl px-2 py-1.5 active:scale-95 transition-all max-w-[150px]" title="Manage databases">
+                <span id="activeDbDot" class="w-1.5 h-1.5 rounded-full bg-slate-600 flex-shrink-0"></span>
+                <span class="min-w-0 text-left">
+                    <span id="activeDbName" class="block text-[10px] font-mono font-bold text-slate-200 truncate leading-tight">not connected</span>
+                    <span id="activeDbHost" class="block text-[8px] font-mono text-slate-500 truncate leading-tight">firebaseio.com</span>
+                </span>
+                <span class="material-icons text-xs text-cyan-500 flex-shrink-0">expand_more</span>
+            </button>
+            <button id="exportDataBtn" class="p-2 bg-slate-950 hover:bg-slate-900 border border-slate-800 text-slate-300 rounded-xl active:scale-95 transition-all flex items-center" title="Export loaded data as JSON">
+                <span class="material-icons text-sm">download</span>
+            </button>
+            <div id="connectionStatus" class="status-pill">
+                <span class="w-1 h-1 rounded-full bg-slate-400"></span>
+                <span id="connectionStatusText">IDLE</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- ========================== LOAD STATUS ========================= -->
+    <div class="bg-slate-950 border-b border-slate-900 px-3 py-1.5">
+        <div class="flex items-center justify-between gap-2">
+            <div class="flex items-center gap-1.5 min-w-0">
+                <span class="material-icons text-[11px] text-cyan-500">sync</span>
+                <span id="loadStatusText" class="text-[9px] font-mono text-slate-500 truncate">Preparing…</span>
+            </div>
+            <span id="schemaBadge" class="text-[8px] font-mono font-bold text-slate-500 bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded flex-shrink-0">no schema</span>
+        </div>
+        <div id="loadProgressWrap" class="h-0.5 w-full bg-slate-900 rounded-full overflow-hidden mt-1">
+            <div id="loadProgressBar" class="h-full bg-cyan-500 transition-all duration-300" style="width:0%"></div>
+        </div>
+    </div>
+
+    <!-- ============================ STAT STRIP ======================== -->
+    <section class="flex overflow-x-auto whitespace-nowrap bg-slate-950 border-b border-slate-900 p-2 gap-2 scrollbar-none shadow-inner sticky top-[53px] z-30">
+        <div class="bg-slate-900/40 border border-slate-800/80 px-3 py-1.5 rounded-xl flex items-center space-x-2 min-w-[110px]">
+            <span class="material-icons text-xs text-emerald-400">sensors</span>
+            <div class="text-[11px] font-mono"><span id="activeClientsCount" class="font-bold text-white">0</span> <span class="text-slate-500">On</span></div>
+        </div>
+        <div class="bg-slate-900/40 border border-slate-800/80 px-3 py-1.5 rounded-xl flex items-center space-x-2 min-w-[110px]">
+            <span class="material-icons text-xs text-cyan-400">phone_android</span>
+            <div class="text-[11px] font-mono"><span id="totalClientsCount" class="font-bold text-white">0</span> <span class="text-slate-500">Dev</span></div>
+        </div>
+        <div class="bg-slate-900/40 border border-slate-800/80 px-3 py-1.5 rounded-xl flex items-center space-x-2 min-w-[110px]">
+            <span class="material-icons text-xs text-amber-400">storage</span>
+            <div class="text-[11px] font-mono"><span id="totalSMSCount" class="font-bold text-white">0</span> <span class="text-slate-500">Sms</span></div>
+        </div>
+        <div class="bg-slate-900/40 border border-slate-800/80 px-3 py-1.5 rounded-xl flex items-center space-x-2 min-w-[110px]">
+            <span class="material-icons text-xs text-purple-400">sim_card</span>
+            <div class="text-[11px] font-mono"><span id="totalSimCount" class="font-bold text-white">0</span> <span class="text-slate-500">Sim</span></div>
+        </div>
+        <div class="bg-slate-900/40 border border-slate-800/80 px-3 py-1.5 rounded-xl flex items-center space-x-2 min-w-[110px]">
+            <span class="material-icons text-xs text-slate-400">filter_alt</span>
+            <div class="text-[11px] font-mono"><span id="visibleClientsCount" class="font-bold text-white">0</span> <span class="text-slate-500">Shown</span></div>
+        </div>
+    </section>
+
+    <div class="flex-1 flex relative">
+        <!-- ========================= DEVICE SIDEBAR ==================== -->
+        <div id="drawerBackdropOverlay" class="hidden fixed inset-0 bg-black/60 z-40 backdrop-blur-xs transition-opacity duration-300"></div>
+        <aside id="deviceSidebarSection" class="fixed top-0 left-0 h-full w-72 bg-slate-950 border-r border-slate-900 flex flex-col transform -translate-x-full md:translate-x-0 transition-transform duration-300 ease-in-out z-50 shadow-2xl md:shadow-none md:sticky md:top-[94px] md:h-[calc(100vh-94px)]">
+            <div class="p-4 bg-slate-900/60 border-b border-slate-900 flex flex-col gap-3">
+                <div class="flex items-center justify-between">
+                    <span class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Routing Filters</span>
+                    <button id="closeDrawerBtn" class="md:hidden p-1 bg-slate-950 rounded-lg border border-slate-800 flex items-center text-slate-400">
+                        <span class="material-icons text-xs">close</span>
+                    </button>
+                </div>
+                <div class="relative">
+                    <input type="text" id="deviceSearchInput" placeholder="Find hardware target..." class="input-element pl-8">
+                    <span class="material-icons absolute left-2.5 top-2.5 text-slate-600 text-xs">search</span>
+                </div>
+                <div class="grid grid-cols-3 p-0.5 bg-slate-950 rounded-xl border border-slate-900 text-center">
+                    <button id="statusFilterBtn-all" class="subtab-pill subtab-pill-active">ALL</button>
+                    <button id="statusFilterBtn-online" class="subtab-pill subtab-pill-inactive">ON</button>
+                    <button id="statusFilterBtn-offline" class="subtab-pill subtab-pill-inactive">OFF</button>
+                </div>
+            </div>
+            <div id="deviceTabsListContainer" class="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
+                <div class="text-xs text-slate-600 text-center py-6 font-mono">Loading data entries...</div>
+            </div>
+        </aside>
+
+        <!-- ============================ MAIN PANEL ==================== -->
+        <div class="flex-1 flex flex-col bg-slate-900/10 min-w-0">
+            <div class="p-2.5 bg-slate-900/20 border-b border-slate-900/60 flex items-center justify-between gap-3 sticky top-[94px] bg-slate-950 z-20">
+                <div class="relative flex-1">
+                    <input type="text" id="panelSearchInput" placeholder="Query content parameters..." class="input-element pl-8 font-mono text-xs">
+                    <span class="material-icons absolute left-2.5 top-2 text-slate-600 text-sm">manage_search</span>
+                </div>
+                <button id="reloadDataBtn" class="btn-secondary flex items-center gap-1">
+                    <span class="material-icons text-xs">refresh</span>
+                    <span class="hidden sm:inline">Reload</span>
                 </button>
             </div>
-        </div>
-        <div class="header-actions">
-            <button id="searchBtn" class="icon-btn" type="button" title="Search devices and messages" aria-label="Search">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4a6 6 0 1 0 3.47 10.9l5.3 5.3 1.42-1.42-5.3-5.3A6 6 0 0 0 10 4zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8z"/></svg>
-            </button>
-            <button id="reloadBtn" class="icon-btn" type="button" title="Reload from database" aria-label="Reload">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></svg>
-            </button>
-            <button id="dbManagerBtn" class="icon-btn" type="button" title="Databases" aria-label="Databases">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3c-4.42 0-8 1.34-8 3v12c0 1.66 3.58 3 8 3s8-1.34 8-3V6c0-1.66-3.58-3-8-3zm0 2c3.87 0 6 .99 6 1s-2.13 1-6 1-6-.99-6-1 2.13-1 6-1zm6 4.5V12c0 .01-2.13 1-6 1s-6-.99-6-1V9.5C7.4 10.42 9.6 11 12 11s4.6-.58 6-1.5zm0 6V18c0 .01-2.13 1-6 1s-6-.99-6-1v-2.5C7.4 16.42 9.6 17 12 17s4.6-.58 6-1.5z"/></svg>
-            </button>
-        </div>
-    </div>
-</header>
 
-<main class="app-main">
+            <main class="flex-1 p-3 space-y-4 pb-24">
+                <div id="layoutNotice" class="hidden text-[10px] font-mono leading-relaxed rounded-xl border px-3 py-2"></div>
 
-    <!-- ============================ DEVICES ============================ -->
-    <section id="tab-devices" class="tab-panel" aria-labelledby="navDevices">
-        <div class="stats-row">
-            <div class="stat-card">
-                <span class="stat-label">Devices</span>
-                <span class="stat-value" id="statTotal">—</span>
-            </div>
-            <div class="stat-card stat-online">
-                <span class="stat-label">Online</span>
-                <span class="stat-value" id="statOnline">—</span>
-            </div>
-            <div class="stat-card stat-offline">
-                <span class="stat-label">Offline</span>
-                <span class="stat-value" id="statOffline">—</span>
-            </div>
-            <div class="stat-card">
-                <span class="stat-label">Showing</span>
-                <span class="stat-value" id="statShowing">—</span>
-            </div>
-        </div>
+                <!-- ---------------- Tab: device grid ---------------- -->
+                <div id="tabContent-clients" class="space-y-2.5">
+                    <h3 class="section-title px-1">Hardware Profile Inventories</h3>
+                    <div id="clientsContainer" class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div class="status-placeholder">Connect a database to sync hardware profiles.</div>
+                    </div>
+                </div>
 
-        <div class="search-row">
-            <input id="deviceFilter" class="input" type="search" placeholder="Filter by ID, model, phone, carrier, IP…" autocomplete="off">
-            <select id="statusFilter" class="input input-compact" aria-label="Filter by status">
-                <option value="all">All</option>
-                <option value="online">Online</option>
-                <option value="offline">Offline</option>
-                <option value="unknown">Unknown</option>
-            </select>
-        </div>
+                <!-- ---------------- Tab: messages ---------------- -->
+                <div id="tabContent-messages" class="hidden space-y-2.5">
+                    <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded-xl border border-slate-900 gap-2">
+                        <div class="flex items-center space-x-1.5 overflow-hidden">
+                            <h3 class="section-title truncate">Logs Feed</h3>
+                            <span id="activeDeviceFilterLabel" class="text-[9px] font-mono text-cyan-400 bg-cyan-950/40 border border-cyan-800/40 px-1.5 py-0.5 rounded">All Devices</span>
+                        </div>
+                        <div class="flex items-center space-x-1.5">
+                            <span id="smsLastSyncLabel" class="hidden md:inline text-[8px] font-mono text-slate-600">never synced</span>
+                            <button id="refreshMessagesBtn" class="btn-secondary flex items-center space-x-1 py-1 px-2.5 text-[10px]">
+                                <span class="material-icons text-xs">sync_alt</span>
+                                <span>Sync</span>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <select id="messageDeviceFilter" class="input-element flex-1">
+                            <option value="">All devices</option>
+                        </select>
+                        <select id="messageDirectionFilter" class="input-element w-28">
+                            <option value="all">In + Out</option>
+                            <option value="in">Inbound</option>
+                            <option value="out">Outbound</option>
+                        </select>
+                    </div>
+                    <div id="smsMessagesContainer" class="space-y-2">
+                        <div class="status-placeholder">Syncing message logs…</div>
+                    </div>
+                </div>
 
-        <div id="layoutNotice" class="notice hidden"></div>
+                <!-- ---------------- Tab: lookup ---------------- -->
+                <div id="tabContent-lookup" class="hidden space-y-2.5">
+                    <h3 class="section-title px-1">Mobile Lookup</h3>
+                    <form id="lookupForm" class="bg-slate-900/60 border border-slate-900 rounded-xl p-3 space-y-2.5">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                            <label class="block">
+                                <span class="text-[9px] font-mono font-bold text-slate-500 uppercase tracking-wider">Mobile number</span>
+                                <input id="lookupMobile" type="tel" inputmode="numeric" placeholder="9876543210" class="input-element mt-1" required>
+                            </label>
+                            <label class="block">
+                                <span class="text-[9px] font-mono font-bold text-slate-500 uppercase tracking-wider">initData (optional)</span>
+                                <input id="lookupInitData" type="text" spellcheck="false" placeholder="leave empty if unused" class="input-element mt-1">
+                            </label>
+                        </div>
+                        <label class="block">
+                            <span class="text-[9px] font-mono font-bold text-slate-500 uppercase tracking-wider">Endpoint</span>
+                            <input id="lookupEndpoint" type="url" spellcheck="false" placeholder="https://example.com/api/sw/check-mobile" class="input-element mt-1">
+                        </label>
+                        <label class="block">
+                            <span class="text-[9px] font-mono font-bold text-slate-500 uppercase tracking-wider">Token (stored in this browser only)</span>
+                            <input id="lookupToken" type="password" spellcheck="false" placeholder="x-token value" class="input-element mt-1">
+                        </label>
+                        <div class="flex flex-wrap items-center gap-2 pt-1">
+                            <button id="lookupSubmit" type="submit" class="bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 font-bold text-[10px] font-mono rounded-xl px-3 py-2 transition flex items-center gap-1.5">
+                                <span class="material-icons text-sm">travel_explore</span><span>Check number</span>
+                            </button>
+                            <button id="lookupSaveBtn" type="button" class="btn-secondary text-[10px] py-2 px-3">Save settings</button>
+                        </div>
+                        <p class="text-[9px] font-mono text-slate-600 leading-relaxed">
+                            POST with <span class="text-slate-400">x-token</span> and
+                            <span class="text-slate-400">{ mobile, token, initData }</span>. Enable the header
+                            <span class="text-cyan-400">Lookup</span> toggle to run this straight from a device card.
+                        </p>
+                    </form>
+                    <div id="lookupStatus" class="hidden text-[10px] font-mono leading-relaxed rounded-xl border px-3 py-2"></div>
+                    <div id="lookupResult" class="hidden bg-slate-900/60 border border-slate-900 rounded-xl p-3 space-y-1"></div>
+                </div>
 
-        <div id="deviceGrid" class="device-grid">
-            <div class="placeholder">Connect a database to list its devices.</div>
-        </div>
-    </section>
+                <!-- ---------------- Tab: data / databases ---------------- -->
+                <div id="tabContent-data" class="hidden space-y-2.5">
+                    <h3 class="section-title px-1">Database Connections</h3>
+                    <div class="bg-slate-900/60 border border-slate-900 rounded-xl p-3 space-y-2">
+                        <div class="text-[10px] font-mono font-bold text-cyan-400 uppercase tracking-wider">Add a database</div>
+                        <input id="dbUrlInput" type="text" placeholder="https://my-project-default-rtdb.firebaseio.com" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-[11px] font-mono text-slate-200 placeholder-slate-600 outline-none focus:border-cyan-500/50 transition">
+                        <input id="dbLabelInput" type="text" placeholder="Label (optional)" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-[11px] font-mono text-slate-200 placeholder-slate-600 outline-none focus:border-cyan-500/50 transition">
+                        <button id="dbAddBtn2" class="w-full bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 font-bold text-[10px] font-mono rounded-lg px-3 py-2.5 transition flex items-center justify-center gap-1.5">
+                            <span class="material-icons text-sm">add_link</span><span>Add &amp; connect</span>
+                        </button>
+                        <div id="dbAddFeedback" class="text-[9px] font-mono text-slate-500 hidden"></div>
+                    </div>
 
-    <!-- ============================ MESSAGES =========================== -->
-    <section id="tab-messages" class="tab-panel hidden" aria-labelledby="navMessages">
-        <div class="panel-head">
-            <button id="messageBackBtn" class="btn btn-ghost hidden" type="button">← Devices</button>
-            <div class="panel-title-wrap">
-                <span class="panel-title">Message feed</span>
-                <span id="messageSubtitle" class="panel-subtitle">No device selected</span>
-            </div>
-            <div class="panel-actions">
-                <button id="refreshMessagesBtn" class="btn btn-ghost" type="button">Refresh</button>
-            </div>
-        </div>
+                    <h3 class="section-title px-1 pt-1">Saved Databases</h3>
+                    <div id="dbListContainer" class="space-y-2"></div>
 
-        <div class="search-row">
-            <input id="messageFilter" class="input" type="search" placeholder="Filter by number or message text…" autocomplete="off">
-        </div>
-
-        <div id="messageList" class="message-list">
-            <div class="placeholder">Pick a device to read its messages.</div>
-        </div>
-    </section>
-
-    <!-- ============================= LOOKUP ============================ -->
-    <section id="tab-lookup" class="tab-panel hidden" aria-labelledby="navLookup">
-        <div class="panel-head">
-            <div class="panel-title-wrap">
-                <span class="panel-title">Mobile lookup</span>
-                <span class="panel-subtitle">Checks a number against the configured endpoint</span>
-            </div>
-        </div>
-
-        <form id="lookupForm" class="card card-form" autocomplete="off">
-            <label class="field">
-                <span class="field-label">Mobile number</span>
-                <input id="lookupMobile" class="input" type="tel" inputmode="numeric" placeholder="9876543210" required>
-            </label>
-            <label class="field">
-                <span class="field-label">Endpoint</span>
-                <input id="lookupEndpoint" class="input" type="url" spellcheck="false" placeholder="https://example.com/api/check-mobile">
-            </label>
-            <label class="field">
-                <span class="field-label">Token (stored in this browser only)</span>
-                <input id="lookupToken" class="input" type="password" spellcheck="false" placeholder="x-token value">
-            </label>
-            <label class="field">
-                <span class="field-label">initData (optional)</span>
-                <input id="lookupInitData" class="input" type="text" spellcheck="false" placeholder="leave empty if unused">
-            </label>
-            <div class="form-actions">
-                <button id="lookupSubmit" class="btn btn-primary" type="submit">Check number</button>
-                <button id="lookupSaveBtn" class="btn btn-ghost" type="button">Save settings</button>
-            </div>
-        </form>
-
-        <div id="lookupStatus" class="notice hidden"></div>
-        <div id="lookupResult" class="card hidden"></div>
-
-        <details class="card card-muted">
-            <summary>Request that will be sent</summary>
-            <pre id="lookupPreview" class="code-block">POST &lt;endpoint&gt;
-x-token: &lt;token&gt;
-{ "mobile": "…", "token": "…", "initData": "" }</pre>
-        </details>
-    </section>
-
-    <!-- =========================== DATABASES =========================== -->
-    <section id="tab-databases" class="tab-panel hidden" aria-labelledby="navDatabases">
-        <div class="panel-head">
-            <div class="panel-title-wrap">
-                <span class="panel-title">Databases</span>
-                <span class="panel-subtitle">Connect to a Realtime Database you own</span>
-            </div>
-        </div>
-
-        <form id="addDbForm" class="card card-form" autocomplete="off">
-            <label class="field">
-                <span class="field-label">Database URL</span>
-                <input id="dbUrlInput" class="input" type="text" spellcheck="false"
-                       placeholder="https://my-project-default-rtdb.firebaseio.com" required>
-            </label>
-            <label class="field">
-                <span class="field-label">Label (optional)</span>
-                <input id="dbLabelInput" class="input" type="text" placeholder="Production fleet">
-            </label>
-            <div class="form-actions">
-                <button id="dbAddBtn" class="btn btn-primary" type="submit">Add &amp; connect</button>
-            </div>
-            <p class="help">
-                A database secret can be appended as <code>?auth=…</code>. It is stored unencrypted in
-                this browser's local storage and sent to that database only. Leave it out when your
-                rules already allow the read.
-            </p>
-        </form>
-
-        <div id="dbFeedback" class="notice hidden"></div>
-
-        <div class="card">
-            <div class="card-head">
-                <span class="section-title">Saved databases</span>
-                <span class="section-hint">tap to connect</span>
-            </div>
-            <div id="dbList" class="db-list">
-                <div class="placeholder">None saved yet.</div>
-            </div>
-        </div>
-
-        <div class="card card-muted">
-            <div class="card-head"><span class="section-title">Detected layout</span></div>
-            <pre id="layoutDetails" class="code-block">Connect a database to inspect its structure.</pre>
-        </div>
-    </section>
-</main>
-
-<!-- ============================ BOTTOM NAV ============================ -->
-<nav class="bottom-nav" aria-label="Sections">
-    <button id="navDevices" class="nav-item nav-active" type="button">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h7v7H4V3zm9 0h7v7h-7V3zM4 12h7v9H4v-9zm9 3h7v6h-7v-6z"/></svg>
-        <span>Devices</span>
-    </button>
-    <button id="navMessages" class="nav-item" type="button">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H8l-5 4V5a1 1 0 0 1 1-1z"/></svg>
-        <span>Messages</span>
-    </button>
-    <button id="navLookup" class="nav-item" type="button">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 10.8a15.5 15.5 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25c1.1.36 2.3.56 3.6.56a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.3.2 2.5.56 3.6a1 1 0 0 1-.25 1L6.6 10.8z"/></svg>
-        <span>Lookup</span>
-    </button>
-    <button id="navDatabases" class="nav-item" type="button">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3c-4.42 0-8 1.34-8 3v12c0 1.66 3.58 3 8 3s8-1.34 8-3V6c0-1.66-3.58-3-8-3zm6 6.5V12c0 .01-2.13 1-6 1s-6-.99-6-1V9.5C7.4 10.42 9.6 11 12 11s4.6-.58 6-1.5zm0 6V18c0 .01-2.13 1-6 1s-6-.99-6-1v-2.5C7.4 16.42 9.6 17 12 17s4.6-.58 6-1.5z"/></svg>
-        <span>Data</span>
-    </button>
-</nav>
-
-<!-- ========================= DEVICE DETAIL ========================== -->
-<div id="deviceModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="deviceModalTitle">
-    <div class="modal-backdrop" data-close="deviceModal"></div>
-    <div class="modal-body">
-        <div class="modal-head">
-            <div>
-                <h2 id="deviceModalTitle">Device</h2>
-                <p id="deviceModalSub" class="panel-subtitle"></p>
-            </div>
-            <button class="icon-btn" type="button" data-close="deviceModal" aria-label="Close">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.3 5.7 12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3z"/></svg>
-            </button>
-        </div>
-        <div id="deviceModalContent" class="modal-content"></div>
-    </div>
-</div>
-
-<!-- ========================== DB MANAGER ============================ -->
-<div id="dbModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="dbModalTitle">
-    <div class="modal-backdrop" data-close="dbModal"></div>
-    <div class="modal-body">
-        <div class="modal-head">
-            <div>
-                <h2 id="dbModalTitle">Switch database</h2>
-                <p class="panel-subtitle">Saved in this browser only</p>
-            </div>
-            <button class="icon-btn" type="button" data-close="dbModal" aria-label="Close">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.3 5.7 12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3z"/></svg>
-            </button>
-        </div>
-        <div id="dbModalList" class="modal-content"></div>
-    </div>
-</div>
-
-<!-- ======================== GLOBAL SEARCH =========================== -->
-<div id="searchModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="searchModalTitle">
-    <div class="modal-backdrop" data-close="searchModal"></div>
-    <div class="modal-body">
-        <div class="modal-head">
-            <h2 id="searchModalTitle" class="sr-only">Search</h2>
-            <input id="globalSearchInput" class="input" type="search" placeholder="Search device ID, phone, model, message text…" autocomplete="off">
-            <button class="icon-btn" type="button" data-close="searchModal" aria-label="Close">
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.3 5.7 12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3z"/></svg>
-            </button>
-        </div>
-        <div id="globalSearchResults" class="modal-content">
-            <div class="placeholder">Type to search the loaded devices and messages.</div>
+                    <h3 class="section-title px-1 pt-1">Detected Layout</h3>
+                    <div class="table-frame">
+                        <pre id="layoutDetails" class="p-3 text-[10px] font-mono text-slate-400 whitespace-pre-wrap break-words">Connect a database to inspect its structure.</pre>
+                    </div>
+                </div>
+            </main>
         </div>
     </div>
-</div>
 
-<div id="toasts" class="toasts" aria-live="polite"></div>
+    <!-- ========================== BOTTOM NAV ========================== -->
+    <nav class="fixed bottom-0 inset-x-0 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 z-[60] grid grid-cols-4 shadow-[0_-4px_15px_rgba(0,0,0,0.4)]">
+        <button id="bottomTabBtn-clients" class="bottom-nav-item bottom-nav-active">
+            <span class="material-icons">dashboard</span>
+            <span>Grid</span>
+        </button>
+        <button id="bottomTabBtn-messages" class="bottom-nav-item bottom-nav-inactive">
+            <span class="material-icons">forum</span>
+            <span>SMS Feed</span>
+        </button>
+        <button id="bottomTabBtn-lookup" class="bottom-nav-item bottom-nav-inactive">
+            <span class="material-icons">travel_explore</span>
+            <span>Lookup</span>
+        </button>
+        <button id="bottomTabBtn-data" class="bottom-nav-item bottom-nav-inactive">
+            <span class="material-icons">storage</span>
+            <span>Data</span>
+        </button>
+    </nav>
 
-<script type="module" src="app.js"></script>
+    <!-- ======================= DATABASE MANAGER ======================= -->
+    <div id="dbManagerModal" class="hidden fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4">
+        <div id="dbManagerBackdrop" class="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
+        <div class="relative w-full sm:max-w-lg max-h-[88vh] bg-slate-900 border border-slate-800 rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+            <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/95">
+                <div class="flex items-center gap-2">
+                    <span class="material-icons text-cyan-400 text-lg">storage</span>
+                    <div>
+                        <div class="text-xs font-black tracking-wider text-slate-100">DATABASES</div>
+                        <div class="text-[9px] font-mono text-slate-500">Add and switch Firebase RTDB targets</div>
+                    </div>
+                </div>
+                <button id="closeDbManagerBtn" class="p-1.5 bg-slate-950 border border-slate-800 rounded-lg text-slate-400 hover:text-slate-200 transition">
+                    <span class="material-icons text-sm">close</span>
+                </button>
+            </div>
+            <div class="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-3">
+                <div class="bg-slate-950/60 border border-slate-800 rounded-xl p-3 space-y-2">
+                    <div class="text-[10px] font-mono font-bold text-cyan-400 uppercase tracking-wider">Add a database</div>
+                    <input id="dbUrlInput2" type="text" placeholder="https://my-project-default-rtdb.firebaseio.com" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-[11px] font-mono text-slate-200 placeholder-slate-600 outline-none focus:border-cyan-500/50 transition">
+                    <input id="dbLabelInput2" type="text" placeholder="Label (optional)" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-[11px] font-mono text-slate-200 placeholder-slate-600 outline-none focus:border-cyan-500/50 transition">
+                    <button id="dbAddBtn" class="w-full bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 font-bold text-[10px] font-mono rounded-lg px-3 py-2.5 transition flex items-center justify-center gap-1.5">
+                        <span class="material-icons text-sm">add_link</span><span>Add &amp; connect</span>
+                    </button>
+                    <div id="dbAddFeedback2" class="text-[9px] font-mono text-slate-500 hidden"></div>
+                    <p class="text-[9px] font-mono text-slate-600 leading-relaxed">
+                        Accepts a plain RTDB URL or one with <span class="text-slate-400">?auth=</span>. Saved in this browser only.
+                    </p>
+                </div>
+                <div class="space-y-2">
+                    <div class="flex items-center justify-between">
+                        <div class="text-[10px] font-mono font-bold text-cyan-400 uppercase tracking-wider">Saved databases</div>
+                        <span class="text-[9px] font-mono text-slate-600">tap to use</span>
+                    </div>
+                    <div id="dbListContainer2" class="space-y-2"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========================= DEVICE DETAIL ======================== -->
+    <div id="deviceModal" class="hidden fixed inset-0 z-[72] flex items-end sm:items-center justify-center p-0 sm:p-4">
+        <div id="deviceModalBackdrop" class="absolute inset-0 bg-black/75 backdrop-blur-sm"></div>
+        <div class="relative w-full sm:max-w-lg max-h-[88vh] bg-slate-900 border border-slate-800 rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+            <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/95 gap-2">
+                <div class="flex items-center gap-2 min-w-0">
+                    <span class="material-icons text-cyan-400 text-lg">phone_android</span>
+                    <div class="min-w-0">
+                        <div id="deviceModalTitle" class="text-xs font-black tracking-wider text-slate-100 truncate">Device</div>
+                        <div id="deviceModalSub" class="text-[9px] font-mono text-slate-500 truncate">—</div>
+                    </div>
+                </div>
+                <button id="closeDeviceModalBtn" class="p-1.5 bg-slate-950 border border-slate-800 rounded-lg text-slate-400 hover:text-slate-200 transition">
+                    <span class="material-icons text-sm">close</span>
+                </button>
+            </div>
+            <div id="deviceModalContent" class="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-2"></div>
+        </div>
+    </div>
+
+    <!-- ======================= PER-DEVICE LOOKUP ====================== -->
+    <div id="deviceLookupModal" class="hidden fixed inset-0 z-[74] flex items-end sm:items-center justify-center p-0 sm:p-4">
+        <div id="deviceLookupBackdrop" class="absolute inset-0 bg-black/75 backdrop-blur-sm"></div>
+        <div class="relative w-full sm:max-w-md max-h-[88vh] bg-slate-900 border border-slate-800 rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+            <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/95 gap-2">
+                <div class="flex items-center gap-2 min-w-0">
+                    <span class="material-icons text-cyan-400 text-lg">travel_explore</span>
+                    <div class="min-w-0">
+                        <div class="text-xs font-black tracking-wider text-slate-100">MOBILE LOOKUP</div>
+                        <div id="deviceLookupSub" class="text-[9px] font-mono text-slate-500 truncate">—</div>
+                    </div>
+                </div>
+                <button id="closeDeviceLookupBtn" class="p-1.5 bg-slate-950 border border-slate-800 rounded-lg text-slate-400 hover:text-slate-200 transition">
+                    <span class="material-icons text-sm">close</span>
+                </button>
+            </div>
+            <div id="deviceLookupContent" class="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-2"></div>
+        </div>
+    </div>
+
+    <!-- ========================= GLOBAL SEARCH ======================== -->
+    <div id="globalSearchModal" class="hidden fixed inset-0 z-[75] flex items-start justify-center p-3 sm:p-6">
+        <div id="globalSearchBackdrop" class="absolute inset-0 bg-black/75 backdrop-blur-sm"></div>
+        <div class="relative w-full sm:max-w-2xl max-h-[85vh] bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden mt-8">
+            <div class="flex items-center gap-2 px-3 py-2.5 border-b border-slate-800">
+                <span class="material-icons text-cyan-400 text-lg">search</span>
+                <input id="globalSearchInput" type="text" placeholder="Search device ID, phone number, model or message text…" class="flex-1 bg-transparent text-xs font-mono text-slate-200 placeholder-slate-600 outline-none">
+                <button id="closeGlobalSearchBtn" class="p-1.5 bg-slate-950 border border-slate-800 rounded-lg text-slate-400 hover:text-slate-200 transition">
+                    <span class="material-icons text-sm">close</span>
+                </button>
+            </div>
+            <div id="globalSearchResults" class="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1.5">
+                <div class="text-[10px] font-mono text-slate-600 text-center py-8">Type to search across every device and message in this database.</div>
+            </div>
+            <div class="px-3 py-1.5 border-t border-slate-800 text-[9px] font-mono text-slate-600 flex items-center justify-between">
+                <span id="globalSearchCount">0 results</span>
+                <span>Esc to close</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- =========================== TOASTS ============================= -->
+    <div id="toastNotificationContainer" class="fixed bottom-20 right-4 left-4 md:left-auto z-[80] flex flex-col gap-1.5 max-w-sm pointer-events-none"></div>
+
+    <script type="module" src="app.js"></script>
 </body>
 </html>

@@ -1,16 +1,16 @@
 # Firebase Manager Pro
 
 A single-page admin panel for **Firebase Realtime Databases that you own**. It lists the
-devices recorded in a database, shows their enrolment details and messages, and includes a
-mobile-number lookup against an endpoint you configure.
+devices recorded in a database, shows their enrolment details and the full message log, and
+includes a mobile-number lookup against an endpoint you configure.
 
-Static files only — no build step, no backend, no third-party script loaded at runtime.
-The panel talks to the database over the Realtime Database **REST API**, so every read is
-bounded and the database URL is chosen at runtime.
+The interface is the original **MATRIX COMMAND** dark layout (Tailwind CDN + Material Icons,
+as before), and the data layer talks to the Realtime Database over its **REST API** — no SDK,
+no backend, every read bounded, database URL chosen at runtime.
 
 ```
-index.html        markup
-style.css         styles (handwritten, no CDN)
+index.html        markup (Tailwind CDN + Material Icons, as in the original build)
+style.css         custom styles layered on top
 app.js            UI wiring, detection, rendering
 lib/detect.js     pure helpers: URLs, layout detection, normalisation
 lib/db.js         Realtime Database REST client
@@ -57,30 +57,28 @@ origin if the endpoint does not send CORS headers.
 
 ## What it does
 
-**Devices** — mirrors the device records in the database: model, battery, online/offline
-state, last-seen ("12m ago"), join date, Android version, IP, serial and every SIM slot
-(number, carrier, ICCID, type). Filter by ID, model, phone, carrier or IP, and narrow by
-status. Opening a card shows the full record plus the raw JSON.
+**Devices** — device cards plus a sidebar list: model, battery bar, online/offline pill,
+last-seen ("12m ago"), join date, Android version, IP and every SIM slot as chips. Filter by
+ID / phone / model / carrier / IP from either search box and by status (ALL · ON · OFF).
+Tapping a card opens the full record — SIM slots with ICCID, serial, raw JSON, copy-ID.
 
-**Messages** — per-device SMS feed with IN/OUT badges, relative timestamps, text filter and
-copy-to-clipboard. Three source layouts are tried in order: a per-device message node
-(`user_sms/<id>` or a nested `sms`/`messages` child), then a global `messages` node filtered
-by device id.
+**Messages** — the feed is aggregated for the **whole database at connect time**, so the SMS
+Feed tab is already populated without clicking a device. Group by device, filter by direction
+(In / Out) or text, copy a body, or jump to the sending device. Three layouts are handled:
+a per-device map (`user_sms/<did>/<msgId>`), a global `messages` / `sms` node (device id read
+from the record, falling back to a phone-number match), and message nodes nested inside each
+device record.
+
+**Lookup** — two ways to call the endpoint:
+* a **Lookup toggle** in the header; when it is on, every device card grows a `Lookup` button
+  that checks that device's recorded number and shows the result in a sheet;
+* the **Lookup tab**, for checking an arbitrary number, with endpoint/token settings.
+  `POST <endpoint>` · header `x-token` · body `{ mobile, token, initData }`.
 
 **Search** — the magnifier searches every loaded device and message at once; results jump
 straight to the device or its message feed.
 
-**Lookup** — checks a mobile number against a `check-mobile` style endpoint:
-
-```
-POST <endpoint>
-Content-Type: application/json
-x-token: <token>
-
-{ "mobile": "9876543210", "token": "<token>", "initData": "" }
-```
-
-The response is flattened into a key/value table and the raw JSON is kept behind a
+The lookup response is flattened into a key/value table with the raw JSON kept behind a
 disclosure. Endpoint and token are entered in the UI and saved in this browser's local
 storage — **no credential is compiled into the bundle**, so nothing secret is committed when
 you deploy the folder.
@@ -141,3 +139,5 @@ lookup client's request shape and error handling (via a stubbed `fetch`).
   origin as the endpoint, or call the endpoint from your own server.
 * Database secrets live in `localStorage`; use a dedicated browser profile on shared machines.
 * `?auth=` URLs end up in browser history — prefer rules-based read access where possible.
+* Tailwind and the Material Icons font load from Google's CDN, so the first paint needs
+  network access; the app itself needs no build step.

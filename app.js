@@ -1,15 +1,17 @@
 /**
- * Firebase Manager Pro — UI layer.
+ * Matrix Command — Firebase Manager Pro (v10 UI)
  *
- * Talks to a Realtime Database through its REST API (see lib/db.js), so the
- * page loads no third-party script. Everything rendered from the database is
- * HTML-escaped.
+ * Read-only inventory for Realtime Databases you own: device cards, log feed,
+ * and a mobile lookup you can run per device or by hand.
+ *
+ * Database access goes through the REST API (lib/db.js) — no SDK, no backend.
  */
 
 import {
     buildCandidatePaths,
     databaseLabel,
     deviceFieldScore,
+    deviceIdFromMessage,
     deviceMatches,
     formatBytes,
     formatTimestamp,
@@ -21,6 +23,7 @@ import {
     objectEntries,
     relativeTime,
     sortByTimeDesc,
+    sameNumber,
 } from "./lib/detect.js";
 
 import {
@@ -35,31 +38,25 @@ import {
     LookupError,
     checkMobile,
     flattenResult,
+    isValidMobile,
+    normalizeMobile,
 } from "./lib/lookup.js";
 
 /* ==================================================================== *
- * Constants
+ * Constants / persistence
  * ==================================================================== */
 
 const STORE_KEY = "fbmp.v1";
 const MAX_DEVICES = 500;
-const MAX_MESSAGES = 400;
-const RESERVED = new Set([
-    "messages", "message", "sms", "chats", "commands", "device_commands",
-    "smsqueue", "sms_queue", "queues", "bot_users", "bots", "sms_forward",
-    "guard", "licenses", "licence", "license", "_comments", "comments", "links",
-    "proxies", "proxy", "admins", "admin", "config", "settings", "logs",
-    "notifications", "stats", "meta", "server", "servers", "prices", "plans",
-]);
-
-/* ==================================================================== *
- * Persistence (this browser only)
- * ==================================================================== */
+const MAX_MESSAGES = 800;
+const MAX_MESSAGE_DEVICES = 80;
+const PER_DEVICE_MESSAGE_LIMIT = 150;
 
 function defaultStore() {
     return {
         databases: [],
         activeUrl: "",
+        lookupEnabled: false,
         lookup: { endpoint: DEFAULT_LOOKUP_ENDPOINT, token: "", initData: "" },
     };
 }
@@ -67,12 +64,13 @@ function defaultStore() {
 function loadStore() {
     try {
         const raw = localStorage.getItem(STORE_KEY);
-        if (!raw) return defaultStore();
-        const parsed = JSON.parse(raw);
         const base = defaultStore();
+        if (!raw) return base;
+        const parsed = JSON.parse(raw);
         return {
             databases: Array.isArray(parsed.databases) ? parsed.databases : [],
             activeUrl: typeof parsed.activeUrl === "string" ? parsed.activeUrl : "",
+            lookupEnabled: Boolean(parsed.lookupEnabled),
             lookup: { ...base.lookup, ...(parsed.lookup || {}) },
         };
     } catch {
@@ -80,15 +78,15 @@ function loadStore() {
     }
 }
 
+let store = loadStore();
+
 function saveStore() {
     try {
         localStorage.setItem(STORE_KEY, JSON.stringify(store));
     } catch {
-        toast("Could not save settings — local storage is unavailable.", "error");
+        toast("Settings could not be saved — local storage is unavailable.", "error");
     }
 }
-
-let store = loadStore();
 
 /* ==================================================================== *
  * Runtime state
@@ -97,25 +95,31 @@ let store = loadStore();
 const runtime = {
     connection: null,
     activeUrl: "",
+    connected: false,
     layout: null,
     devices: [],
     deviceById: new Map(),
-    messages: [],
-    messagesByDevice: new Map(),
-    selectedDeviceId: null,
-    connected: false,
-    tab: "devices",
-    filter: "",
+    deviceList: null,          // flat list of device ids before normalisation
+    messages: [],              // aggregated, normalised, newest first
+    messageIndex: new Map(),   // deviceId -> normalised messages
+    messageSourceLabel: "",
+    selectedDeviceId: "",
+    messageDeviceFilter: "",
+    messageDirectionFilter: "all",
+    deviceQuery: "",
     statusFilter: "all",
-    messageFilter: "",
+    panelQuery: "",
+    tab: "clients",
     loading: false,
 };
 
 /* ==================================================================== *
- * DOM helpers
+ * Tiny DOM helpers
  * ==================================================================== */
 
 const $ = (id) => document.getElementById(id);
+const show = (id) => $(id)?.classList.remove("hidden");
+const hide = (id) => $(id)?.classList.add("hidden");
 
 function esc(value) {
     return String(value ?? "")
@@ -126,34 +130,49 @@ function esc(value) {
         .replace(/'/g, "&#39;");
 }
 
-function toast(message, kind = "info", ttl = 4200) {
+function toast(message, kind = "info", ttl = 4000) {
+    const host = $("toastNotificationContainer");
+    if (!host) return;
     const node = document.createElement("div");
-    node.className = `toast toast-${kind}`;
+    node.className = `toast-item toast-${kind} pointer-events-auto`;
     node.textContent = message;
-    $("toasts").appendChild(node);
+    host.appendChild(node);
     setTimeout(() => node.remove(), ttl);
 }
 
-function setNotice(id, message, kind = "info") {
-    const node = $(id);
+function setNotice(message, kind = "info") {
+    const node = $("layoutNotice");
     if (!node) return;
     if (!message) {
-        node.className = "notice hidden";
+        node.className = "hidden";
         node.textContent = "";
         return;
     }
-    node.className = `notice notice-${kind}`;
+    node.className = `notice-${kind} text-[10px] font-mono leading-relaxed rounded-xl border px-3 py-2`;
     node.textContent = message;
 }
 
-function openModal(id) {
-    $(id).classList.remove("hidden");
-    const focusable = $(id).querySelector("input, button");
-    if (focusable && id === "searchModal") focusable.focus();
+function setConnectionPill(state, text) {
+    const colours = {
+        idle: "bg-slate-400",
+        busy: "bg-amber-400 animate-ping",
+        ok: "bg-emerald-400",
+        error: "bg-rose-500",
+    };
+    const dot = $("connectionStatus").querySelector("span");
+    dot.className = `w-1 h-1 rounded-full ${colours[state] || colours.idle}`;
+    $("connectionStatusText").textContent = text;
+    $("activeDbDot").className = `w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+        state === "ok" ? "bg-emerald-400" : state === "error" ? "bg-rose-500" : "bg-slate-600"
+    }`;
 }
 
-function closeModal(id) {
-    $(id).classList.add("hidden");
+function setProgress(percent) {
+    $("loadProgressBar").style.width = `${Math.max(0, Math.min(100, percent))}%`;
+}
+
+function setLoadStatus(text) {
+    $("loadStatusText").textContent = text;
 }
 
 function copyText(text, label = "Copied") {
@@ -162,80 +181,127 @@ function copyText(text, label = "Copied") {
         return;
     }
     navigator.clipboard.writeText(text).then(
-        () => toast(`${label}.`, "success", 1800),
+        () => toast(`${label}.`, "success", 1600),
         () => toast("Could not copy to clipboard.", "error"),
     );
+}
+
+function openModal(id) {
+    $(id)?.classList.remove("hidden");
+}
+
+function closeModal(id) {
+    $(id)?.classList.add("hidden");
 }
 
 /* ==================================================================== *
  * Connection + layout detection
  * ==================================================================== */
 
-function setConnectionState(kind, label) {
-    const dot = $("connectionDot");
-    dot.className = `dot dot-${kind}`;
-    $("connectionLabel").textContent = label;
-}
-
 async function connect(url, { silent = false } = {}) {
     const connection = connectionFromInput(url);
     if (!connection) {
-        setNotice("dbFeedback", "That does not look like a database URL.", "error");
-        setConnectionState("error", "invalid URL");
+        toast("That does not look like a database URL.", "error");
+        setConnectionPill("error", "INVALID URL");
         return false;
     }
-
-    runtime.connection = { ...connection, displayUrl: normalizeDatabaseUrl(url) };
-    runtime.activeUrl = normalizeDatabaseUrl(url);
-    store.activeUrl = runtime.activeUrl;
-    saveStore();
-
-    setConnectionState("busy", "connecting…");
     if (runtime.loading) return false;
+
+    const displayUrl = normalizeDatabaseUrl(url);
+    runtime.connection = { ...connection };
+    runtime.activeUrl = displayUrl;
+    store.activeUrl = displayUrl;
+    saveStore();
+    updateDbHeader(displayUrl);
+
     runtime.loading = true;
+    setConnectionPill("busy", "CONNECTING");
+    setProgress(8);
+    setLoadStatus("Connecting to database…");
+    setNotice("");
 
     try {
         const probe = await probeConnection(connection);
+        setProgress(25);
+
         if (probe.empty) {
-            runtime.connected = true;
-            setConnectionState("ok", `${databaseLabel(url)} · empty`);
-            setNotice("dbFeedback", "Connected, but the database has no top-level data at this path.", "warn");
             runtime.layout = null;
             runtime.devices = [];
+            runtime.messages = [];
             runtime.deviceById.clear();
-            renderAll();
+            runtime.messageIndex.clear();
+            runtime.connected = true;
+            setConnectionPill("ok", "EMPTY");
+            setSchemaBadge("empty");
+            setLoadStatus("Connected — database has no data at this path.");
+            setProgress(100);
+            renderEverything();
+            if (!silent) toast("Connected, but the database is empty.", "warn");
             return true;
         }
 
         const layout = await detectLayout(connection, probe.keys);
         runtime.layout = layout;
+        setProgress(45);
 
+        setLoadStatus("Reading device records…");
         await loadDevices();
-        runtime.connected = true;
+        setProgress(70);
 
-        setConnectionState("ok", `${databaseLabel(url)} · ${runtime.devices.length} devices`);
-        setNotice("dbFeedback", "", "info");
+        setLoadStatus("Reading message logs…");
+        await loadMessages();
+        setProgress(100);
+
+        runtime.connected = true;
+        setConnectionPill("ok", "LIVE");
+        setSchemaBadge(layout.devicePath || "no devices");
+        setLoadStatus(
+            `Synced · ${runtime.devices.length} devices · ${runtime.messages.length} messages`,
+        );
+        renderEverything();
+
         if (!silent) {
-            toast(`Connected to ${databaseLabel(url)} — ${runtime.devices.length} device(s).`, "success");
+            toast(
+                `Connected to ${databaseLabel(displayUrl)} — ${runtime.devices.length} device(s), ${runtime.messages.length} message(s).`,
+                "success",
+            );
         }
-        renderAll();
         return true;
     } catch (error) {
         const message = error?.message || "Could not connect to the database.";
         runtime.connected = false;
         runtime.layout = null;
         runtime.devices = [];
+        runtime.messages = [];
         runtime.deviceById.clear();
-        runtime.messagesByDevice.clear();
-        runtime.selectedDeviceId = null;
-        setConnectionState("error", "connection failed");
-        setNotice("dbFeedback", message, "error");
-        if (!silent) toast(message, "error");
-        renderAll();
+        runtime.messageIndex.clear();
+        setConnectionPill("error", "FAILED");
+        setProgress(100);
+        setLoadStatus(message);
+        setNotice(message, "error");
+        setSchemaBadge("no schema");
+        renderEverything();
+        if (!silent) toast(message, "error", 7000);
         return false;
     } finally {
         runtime.loading = false;
     }
+}
+
+function updateDbHeader(url) {
+    const label = databaseLabel(url);
+    $("activeDbName").textContent = label === "not connected" ? "not connected" : label;
+    $("activeDbHost").textContent = (() => {
+        try {
+            return new URL(url.replace(/\/+$/, "")).hostname.split(".").slice(-3).join(".");
+        } catch {
+            return "firebaseio.com";
+        }
+    })();
+}
+
+function setSchemaBadge(text) {
+    $("schemaBadge").textContent = text;
 }
 
 async function detectLayout(connection, rootKeys) {
@@ -247,8 +313,7 @@ async function detectLayout(connection, rootKeys) {
     await Promise.all(
         parents.slice(0, 6).map(async (parent) => {
             try {
-                const shallow = await readShallow(connection, parent);
-                childKeysByNode[parent] = Object.keys(shallow);
+                childKeysByNode[parent] = Object.keys(await readShallow(connection, parent));
             } catch {
                 childKeysByNode[parent] = [];
             }
@@ -268,8 +333,7 @@ async function detectLayout(connection, rootKeys) {
             const samples = await Promise.all(
                 ids.slice(0, 3).map(async (id) => {
                     try {
-                        const { data } = await readNode(connection, `${candidate}/${id}`);
-                        return data;
+                        return (await readNode(connection, `${candidate}/${id}`)).data;
                     } catch {
                         return null;
                     }
@@ -279,21 +343,22 @@ async function detectLayout(connection, rootKeys) {
             const records = samples.filter(
                 (record) => record && typeof record === "object" && !Array.isArray(record),
             );
-            if (records.length === 0) continue;
-
-            if (isPingOnly(records)) {
-                rejected.push({ path: candidate, reason: "ping-only decoy" });
+            if (records.length === 0) {
+                rejected.push(`${candidate}: no object records`);
                 continue;
             }
-
+            if (isPingOnly(records)) {
+                rejected.push(`${candidate}: ping-only decoy`);
+                continue;
+            }
             const score = records.reduce((sum, record) => sum + deviceFieldScore(record), 0);
             if (score > 0) {
                 devicePath = candidate;
                 break;
             }
-            rejected.push({ path: candidate, reason: "no device fields" });
+            rejected.push(`${candidate}: no device fields`);
         } catch {
-            rejected.push({ path: candidate, reason: "unreadable" });
+            rejected.push(`${candidate}: unreadable`);
         }
     }
 
@@ -306,23 +371,30 @@ async function detectLayout(connection, rootKeys) {
 }
 
 function resolveMessageSource(rootKeys) {
-    const has = (key) => rootKeys.some((k) => k.toLowerCase() === key);
-    if (has("user_sms")) return { type: "device-map", path: "user_sms" };
-    if (has("messages")) return { type: "global", path: "messages" };
-    if (has("sms")) return { type: "global", path: "sms" };
+    const lower = rootKeys.map((key) => key.toLowerCase());
+    const find = (names) => rootKeys[lower.findIndex((key) => names.includes(key))];
+
+    const perDevice = find(["user_sms", "user_msg", "user_messages", "user_messages_list", "sms_store"]);
+    if (perDevice) return { type: "device-map", path: perDevice };
+
+    const global = find(["messages", "sms", "all_messages", "all_sms", "message_list"]);
+    if (global) return { type: "global", path: global };
+
     return { type: "auto", path: "" };
 }
+
+/* ==================================================================== *
+ * Data loading
+ * ==================================================================== */
 
 async function loadDevices() {
     const { connection, layout } = runtime;
     runtime.devices = [];
     runtime.deviceById.clear();
-    runtime.messagesByDevice.clear();
 
     if (!layout?.devicePath) {
         setNotice(
-            "layoutNotice",
-            "No device records were recognised in this database. Open the Data tab to inspect the detected layout and the rejected candidates.",
+            "No device records were recognised in this database. The detected layout is shown in the Data tab.",
             "warn",
         );
         return;
@@ -337,152 +409,209 @@ async function loadDevices() {
         .sort((a, b) => (b.lastSeen ?? 0) - (a.lastSeen ?? 0));
     for (const device of runtime.devices) runtime.deviceById.set(device.id, device);
 
-    const parts = [
-        `Device records found at "${layout.devicePath}" (${formatBytes(bytes)} read).`,
-    ];
-    if (entries.length > MAX_DEVICES) {
-        parts.push(`Showing the first ${MAX_DEVICES} of ${entries.length} records.`);
-    }
-    if (layout.rejected.length) {
-        parts.push(
-            `Skipped: ${layout.rejected.map((r) => `${r.path} (${r.reason})`).join(", ")}.`,
-        );
-    }
-    setNotice("layoutNotice", parts.join(" "), entries.length > MAX_DEVICES ? "warn" : "info");
+    const notes = [`Device records at "${layout.devicePath}" (read ${formatBytes(bytes)}).`];
+    if (entries.length > MAX_DEVICES) notes.push(`Showing first ${MAX_DEVICES} of ${entries.length}.`);
+    if (layout.rejected.length) notes.push(`Skipped → ${layout.rejected.join(", ")}.`);
+    setNotice(notes.join(" "), entries.length > MAX_DEVICES ? "warn" : "info");
 }
 
-async function loadMessagesFor(deviceId, { force = false } = {}) {
-    if (!deviceId) return [];
-    if (!force && runtime.messagesByDevice.has(deviceId)) {
-        return runtime.messagesByDevice.get(deviceId);
-    }
+/**
+ * Load every message the database exposes, with three strategies so the feed
+ * is populated without having to click a device first:
+ *   1. per-device map node (user_sms/<did>/<msgId>)
+ *   2. a global messages/sms node (device id resolved per record)
+ *   3. message nodes nested inside each device record
+ */
+async function loadMessages({ force = false } = {}) {
+    const { connection, layout } = runtime;
+    if (!layout) return;
 
-    const { connection, layout, deviceById } = runtime;
-    const device = deviceById.get(deviceId);
-    if (!device || !layout) return [];
+    const collected = [];
+    const seen = new Set();
+    const add = (deviceId, list) => {
+        for (const message of list) {
+            const key = `${deviceId}|${message.id}|${message.ts ?? ""}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            collected.push({ ...message, deviceId });
+        }
+    };
 
-    const attempts = [];
-    const source = layout.messageSource;
+    const source = layout.messageSource || { type: "auto", path: "" };
+    let label = "";
 
+    // 1 — per-device map node
     if (source.type === "device-map") {
-        attempts.push(`${source.path}/${deviceId}`);
-    }
-    if (source.type !== "global") {
-        // Probe the device record itself for a nested message node.
         try {
-            const subKeys = await readShallow(connection, `${layout.devicePath}/${deviceId}`);
-            const nested = Object.keys(subKeys).filter((key) =>
-                /^(sms|messages|chats|inbox|sent|outbox|message_list)$/i.test(key),
+            const shallow = await readShallow(connection, source.path);
+            const ids = Object.keys(shallow);
+            const deviceIds = ids.length ? ids : runtime.devices.map((d) => d.id);
+            const batch = deviceIds.slice(0, MAX_MESSAGE_DEVICES);
+
+            const results = await Promise.all(
+                batch.map(async (deviceId) => {
+                    try {
+                        const { data } = await readNode(connection, `${source.path}/${deviceId}`, {
+                            limitToLast: PER_DEVICE_MESSAGE_LIMIT,
+                        });
+                        return [deviceId, messagePairs(data)];
+                    } catch {
+                        return [deviceId, []];
+                    }
+                }),
             );
-            for (const key of nested) attempts.push(`${layout.devicePath}/${deviceId}/${key}`);
-        } catch {
-            /* the device node may be a leaf; ignore */
-        }
-    }
 
-    let messages = [];
-    let usedPath = "";
-
-    for (const path of attempts) {
-        try {
-            const { data } = await readNode(connection, path, { limitToLast: MAX_MESSAGES });
-            const list = messageListFrom(data, device);
-            if (list.length) {
-                messages = list;
-                usedPath = path;
-                break;
+            for (const [deviceId, pairs] of results) {
+                const device = runtime.deviceById.get(deviceId);
+                add(
+                    deviceId,
+                    pairs.map(([id, raw]) =>
+                        normalizeMessage(raw, id, { deviceNumber: device?.phoneNumber || "" }),
+                    ),
+                );
             }
+            if (collected.length) label = source.path;
         } catch {
-            /* try the next candidate */
+            /* fall through to the next strategy */
         }
     }
 
-    if (!messages.length && source.type !== "device-map") {
-        for (const path of [source.path || "messages", "messages", "sms"]) {
-            if (!path) continue;
+    // 2 — global node
+    if (!collected.length && source.type !== "device-map") {
+        const candidates = [source.path, "messages", "sms", "all_messages"].filter(Boolean);
+        for (const path of candidates) {
             try {
                 const { data } = await readNode(connection, path, { limitToLast: MAX_MESSAGES });
-                const list = messageListFrom(data, device, { filterByDevice: true });
-                if (list.length) {
-                    messages = list;
-                    usedPath = path;
-                    break;
+                const pairs = messagePairs(data);
+                if (!pairs.length) continue;
+
+                for (const [id, raw] of pairs) {
+                    const deviceId = deviceIdFromMessage(raw) || matchDeviceByAddress(raw);
+                    const device = runtime.deviceById.get(deviceId);
+                    add(
+                        deviceId || "unassigned",
+                        [
+                            normalizeMessage(raw, id, {
+                                deviceNumber: device?.phoneNumber || "",
+                            }),
+                        ],
+                    );
                 }
+                label = path;
+                break;
             } catch {
-                /* next */
+                /* next candidate */
             }
         }
     }
 
-    const record = { messages, path: usedPath };
-    runtime.messagesByDevice.set(deviceId, record);
-    return record;
-}
-
-function messageListFrom(data, device, { filterByDevice = false } = {}) {
-    if (!data || typeof data !== "object") return [];
-
-    let pairs = [];
-    if (Array.isArray(data)) {
-        pairs = data.map((entry, index) => [String(index), entry]);
-    } else {
-        const values = Object.values(data);
-        const looksLikeRecord =
-            values.length > 0 &&
-            values.every((v) => v === null || (typeof v !== "object" && typeof v !== "undefined"));
-        if (looksLikeRecord && ("body" in data || "message" in data || "text" in data)) {
-            pairs = [["0", data]];
-        } else {
-            pairs = Object.entries(data);
-        }
-    }
-
-    const list = pairs
-        .filter(([, value]) => value && typeof value === "object")
-        .map(([id, value]) =>
-            normalizeMessage(value, id, { deviceNumber: device?.phoneNumber || "" }),
+    // 3 — nested inside each device record
+    if (!collected.length && layout.devicePath) {
+        const batch = runtime.devices.slice(0, 40);
+        const results = await Promise.all(
+            batch.map(async (device) => {
+                try {
+                    const subKeys = Object.keys(
+                        await readShallow(connection, `${layout.devicePath}/${device.id}`),
+                    );
+                    const nested = subKeys.filter((key) =>
+                        /^(sms|messages|chats|inbox|sent|outbox|message_list)$/i.test(key),
+                    );
+                    if (!nested.length) return [device.id, []];
+                    const { data } = await readNode(
+                        connection,
+                        `${layout.devicePath}/${device.id}/${nested[0]}`,
+                        { limitToLast: PER_DEVICE_MESSAGE_LIMIT },
+                    );
+                    return [device.id, messagePairs(data)];
+                } catch {
+                    return [device.id, []];
+                }
+            }),
         );
 
-    if (!filterByDevice) return sortByTimeDesc(list).slice(0, MAX_MESSAGES);
+        for (const [deviceId, pairs] of results) {
+            const device = runtime.deviceById.get(deviceId);
+            add(
+                deviceId,
+                pairs.map(([id, raw]) =>
+                    normalizeMessage(raw, id, { deviceNumber: device?.phoneNumber || "" }),
+                ),
+            );
+        }
+        if (collected.length) label = `${layout.devicePath}/<id>`;
+    }
 
-    const deviceIdFields = ["device", "deviceid", "device_id", "did", "senderdevice", "clientid", "uid", "user"];
-    const matched = list.filter((message) => {
-        const raw = message.raw || {};
-        const lowerKeys = Object.keys(raw).map((k) => k.toLowerCase());
-        const fieldKey = lowerKeys.find((k) => deviceIdFields.includes(k));
-        if (!fieldKey) return false;
-        const originalKey = Object.keys(raw).find((k) => k.toLowerCase() === fieldKey);
-        return String(raw[originalKey]) === device.id;
-    });
+    runtime.messages = sortByTimeDesc(collected).slice(0, MAX_MESSAGES);
+    runtime.messageSourceLabel = label;
 
-    return sortByTimeDesc(matched).slice(0, MAX_MESSAGES);
+    runtime.messageIndex = new Map();
+    for (const message of runtime.messages) {
+        const list = runtime.messageIndex.get(message.deviceId) || [];
+        list.push(message);
+        runtime.messageIndex.set(message.deviceId, list);
+    }
+
+    if (runtime.messageDeviceFilter && !runtime.deviceById.has(runtime.messageDeviceFilter)) {
+        runtime.messageDeviceFilter = "";
+    }
+}
+
+/** Flatten a messages node into [id, record] pairs. */
+function messagePairs(data) {
+    if (!data || typeof data !== "object") return [];
+
+    if (Array.isArray(data)) {
+        return data
+            .map((entry, index) => [String(index), entry])
+            .filter(([, entry]) => entry && typeof entry === "object");
+    }
+
+    const values = Object.values(data);
+    const looksLikeRecord =
+        values.length > 0 &&
+        values.every((value) => value === null || typeof value !== "object");
+    if (looksLikeRecord && ("body" in data || "message" in data || "text" in data)) {
+        return [["0", data]];
+    }
+    return Object.entries(data).filter(([, value]) => value && typeof value === "object");
+}
+
+function matchDeviceByAddress(raw) {
+    const address = raw?.from || raw?.sender || raw?.address || raw?.to || "";
+    if (!address) return "";
+    for (const device of runtime.devices) {
+        if (!device.phoneNumber) continue;
+        if (sameNumber(address, device.phoneNumber)) return device.id;
+    }
+    return "";
 }
 
 /* ==================================================================== *
- * Rendering
+ * Views
  * ==================================================================== */
 
-function renderAll() {
+function renderEverything() {
     renderStats();
+    renderSidebar();
     renderDevices();
     renderMessages();
     renderDatabases();
     renderLayoutDetails();
+    renderMessageDeviceFilter();
     renderLookupPreview();
+    renderLookupToggle();
 }
 
 function renderStats() {
     const devices = runtime.devices;
-    $("statTotal").textContent = devices.length ? String(devices.length) : "—";
-    $("statOnline").textContent = devices.length
-        ? String(devices.filter((d) => d.status === "online").length)
-        : "—";
-    $("statOffline").textContent = devices.length
-        ? String(devices.filter((d) => d.status === "offline").length)
-        : "—";
-
-    const visible = filteredDevices();
-    $("statShowing").textContent = devices.length ? String(visible.length) : "—";
+    $("activeClientsCount").textContent = String(devices.filter((d) => d.status === "online").length);
+    $("totalClientsCount").textContent = String(devices.length);
+    $("totalSMSCount").textContent = String(runtime.messages.length);
+    $("totalSimCount").textContent = String(
+        devices.reduce((sum, device) => sum + device.sims.length, 0),
+    );
+    $("visibleClientsCount").textContent = String(filteredDevices().length);
 }
 
 function filteredDevices() {
@@ -490,216 +619,285 @@ function filteredDevices() {
         if (runtime.statusFilter !== "all" && device.status !== runtime.statusFilter) {
             return false;
         }
-        return deviceMatches(device, runtime.filter);
+        if (!deviceMatches(device, runtime.deviceQuery)) return false;
+        if (runtime.panelQuery && !deviceMatches(device, runtime.panelQuery)) return false;
+        return true;
     });
+}
+
+function statusPill(device) {
+    const map = {
+        online: "border-emerald-500/30 bg-emerald-500/10 text-emerald-400",
+        offline: "border-slate-700 bg-slate-900 text-slate-500",
+        unknown: "border-amber-500/30 bg-amber-500/10 text-amber-400",
+    };
+    return `<span class="status-pill ${map[device.status]} text-[8px] px-1.5 py-0.5">${esc(
+        device.status,
+    )}</span>`;
 }
 
 function batteryMarkup(device) {
     if (device.battery === null || device.battery === undefined) {
-        return `<span class="battery-none">battery —</span>`;
+        return `<span class="battery-missing">battery —</span>`;
     }
     const level = device.battery;
     const cls = level <= 15 ? "critical" : level <= 35 ? "low" : "";
-    return `
-        <span class="battery">
-            <span>${level}%</span>
-            <span class="battery-track"><span class="battery-fill ${cls}" style="width:${level}%"></span></span>
-        </span>`;
-}
-
-function statusBadge(device) {
-    const cls = device.status === "online" ? "badge-online" : device.status === "offline" ? "badge-offline" : "badge-unknown";
-    return `<span class="badge ${cls}">${esc(device.status)}</span>`;
+    return `<span class="client-battery">
+        <span>${level}%</span>
+        <span class="battery-bar"><span class="battery-fill ${cls}" style="width:${level}%"></span></span>
+    </span>`;
 }
 
 function renderDevices() {
-    const grid = $("deviceGrid");
+    const container = $("clientsContainer");
     const devices = filteredDevices();
 
-    if (!runtime.connection || !runtime.connected) {
-        grid.innerHTML = `<div class="placeholder">Connect a database to list its devices.<br>Use the Data tab to add one.</div>`;
+    if (!runtime.connected) {
+        container.innerHTML = `<div class="status-placeholder">Connect a database to sync hardware profiles.</div>`;
         return;
     }
     if (!runtime.devices.length) {
-        grid.innerHTML = `<div class="placeholder">This database has no recognised device records.</div>`;
+        container.innerHTML = `<div class="status-placeholder">No device records were recognised in this database.</div>`;
         return;
     }
     if (!devices.length) {
-        grid.innerHTML = `<div class="placeholder">No device matches the current filter.</div>`;
+        container.innerHTML = `<div class="status-placeholder">No hardware target matches the current filters.</div>`;
         return;
     }
 
-    grid.innerHTML = devices
+    container.innerHTML = devices
         .map((device) => {
-            const phone = device.phoneNumber ? esc(device.phoneNumber) : "—";
-            const carrier = device.operator ? esc(device.operator) : device.sims.length ? `${device.sims.length} SIM` : "—";
-            const seen = relativeTime(device.lastSeen);
+            const messageCount = runtime.messageIndex.get(device.id)?.length || 0;
+            const simChips = device.sims.length
+                ? device.sims
+                      .map(
+                          (sim) =>
+                              `<span class="chip" title="${esc(sim.carrier || "SIM")} ${esc(
+                                  sim.iccid || "",
+                              )}">${esc(sim.number || sim.carrier || `SIM ${sim.slot ?? "?"}`)}</span>`,
+                      )
+                      .join(" ")
+                : `<span class="chip chip-idle">no sim data</span>`;
+
             return `
-            <button class="device-card" type="button" data-device="${esc(device.id)}">
-                <div class="device-top">
-                    <div style="min-width:0">
-                        <span class="device-id">${esc(device.id)}</span>
-                        <span class="device-model">${esc(device.modelName || "unknown model")}</span>
+            <article class="client-card client-interactive-card" data-device="${esc(device.id)}">
+                <div class="client-head">
+                    <div class="min-w-0">
+                        <div class="client-title">${esc(device.id)}</div>
+                        <span class="client-subtitle">${esc(device.modelName || "unknown model")}</span>
                     </div>
-                    ${statusBadge(device)}
+                    ${statusPill(device)}
                 </div>
-                <div class="device-meta">
-                    <span><b>Phone</b> ${phone}</span>
-                    <span><b>Carrier</b> ${carrier}</span>
-                    <span><b>Android</b> ${device.androidV ? esc(device.androidV) : "—"}</span>
-                    <span><b>SIMs</b> ${device.sims.length}${device.dualSim ? " (dual)" : ""}</span>
+                <div class="client-grid">
+                    <span><b>phone</b> ${esc(device.phoneNumber || "—")}</span>
+                    <span><b>carrier</b> ${esc(device.operator || "—")}</span>
+                    <span><b>android</b> ${esc(device.androidV || "—")}</span>
+                    <span><b>ip</b> ${esc(device.ip || "—")}</span>
                 </div>
+                <div class="flex flex-wrap gap-1">${simChips}</div>
                 ${batteryMarkup(device)}
-                <div class="device-foot">
-                    <span>seen ${esc(seen)}</span>
-                    <span>${device.joined ? `joined ${esc(relativeTime(device.joined))}` : ""}</span>
+                <div class="client-foot">
+                    <span>seen ${esc(relativeTime(device.lastSeen))}</span>
+                    <span>${messageCount} msg</span>
                 </div>
-            </button>`;
+                <div class="card-actions">
+                    <button type="button" class="card-btn" data-logs="${esc(device.id)}">
+                        <span class="material-icons">forum</span>Logs
+                    </button>
+                    ${
+                        store.lookupEnabled
+                            ? `<button type="button" class="card-btn card-btn-lookup" data-lookup="${esc(
+                                  device.id,
+                              )}" ${device.phoneNumber ? "" : "disabled title=\"No number recorded\""}>
+                                   <span class="material-icons">travel_explore</span>Lookup
+                               </button>`
+                            : ""
+                    }
+                </div>
+            </article>`;
         })
         .join("");
 }
 
+function renderSidebar() {
+    const container = $("deviceTabsListContainer");
+    const devices = filteredDevices();
+
+    if (!runtime.devices.length) {
+        container.innerHTML = `<div class="text-xs text-slate-600 text-center py-6 font-mono">No devices loaded.</div>`;
+        return;
+    }
+    if (!devices.length) {
+        container.innerHTML = `<div class="text-xs text-slate-600 text-center py-6 font-mono">No match.</div>`;
+        return;
+    }
+
+    container.innerHTML = devices
+        .map(
+            (device) => `
+        <button type="button" class="sidebar-device ${
+            runtime.selectedDeviceId === device.id ? "sidebar-device-active" : ""
+        }" data-select="${esc(device.id)}">
+            <span class="sd-dot status-dot-${esc(device.status)}"></span>
+            <span class="min-w-0 flex-1">
+                <span class="sd-id">${esc(device.id)}</span>
+                <span class="sd-meta">${esc(device.phoneNumber || device.modelName || "no number")}</span>
+            </span>
+        </button>`,
+        )
+        .join("");
+}
+
+function renderMessageDeviceFilter() {
+    const select = $("messageDeviceFilter");
+    const ids = [...runtime.messageIndex.keys()].sort();
+    const current = runtime.messageDeviceFilter;
+
+    select.innerHTML =
+        `<option value="">All devices (${runtime.messages.length})</option>` +
+        ids
+            .map((id) => {
+                const count = runtime.messageIndex.get(id).length;
+                const label = id === "unassigned" ? "Unassigned" : id;
+                return `<option value="${esc(id)}" ${current === id ? "selected" : ""}>${esc(
+                    label,
+                )} (${count})</option>`;
+            })
+            .join("");
+}
+
+function visibleMessages() {
+    let list = runtime.messages;
+    if (runtime.messageDeviceFilter) {
+        list = list.filter((message) => message.deviceId === runtime.messageDeviceFilter);
+    }
+    if (runtime.messageDirectionFilter !== "all") {
+        list = list.filter((message) => message.direction === runtime.messageDirectionFilter);
+    }
+    if (runtime.panelQuery) {
+        list = list.filter(
+            (message) => messageMatches(message, runtime.panelQuery) || message.deviceId.includes(runtime.panelQuery),
+        );
+    }
+    return list;
+}
+
 function renderMessages() {
-    const list = $("messageList");
-    const subtitle = $("messageSubtitle");
-    const device = runtime.selectedDeviceId
-        ? runtime.deviceById.get(runtime.selectedDeviceId)
-        : null;
+    const container = $("smsMessagesContainer");
+    const label = $("activeDeviceFilterLabel");
+    const filterDevice = runtime.selectedDeviceId || runtime.messageDeviceFilter;
 
-    $("messageBackBtn").classList.toggle("hidden", !device);
+    label.textContent = filterDevice
+        ? filterDevice === "unassigned"
+            ? "Unassigned"
+            : filterDevice
+        : "All Devices";
+    label.title = runtime.messageSourceLabel ? `source: ${runtime.messageSourceLabel}` : "";
 
-    if (!runtime.connection || !runtime.connected) {
-        subtitle.textContent = "No database connected";
-        list.innerHTML = `<div class="placeholder">Connect a database first.</div>`;
-        return;
-    }
-    if (!device) {
-        subtitle.textContent = "No device selected";
-        list.innerHTML = `<div class="placeholder">Pick a device card to read its messages.</div>`;
+    if (!runtime.connected) {
+        container.innerHTML = `<div class="status-placeholder">Connect a database to sync message logs.</div>`;
         return;
     }
 
-    subtitle.textContent = `${device.id} · ${device.phoneNumber || "no number"}`;
-    const record = runtime.messagesByDevice.get(device.id);
-    if (!record) {
-        list.innerHTML = `<div class="placeholder">Loading messages…</div>`;
+    const list = visibleMessages();
+    if (!runtime.messages.length) {
+        container.innerHTML = `<div class="status-placeholder">No message node was found in this database.<br>The feed stays empty when the database does not store SMS.</div>`;
+        return;
+    }
+    if (!list.length) {
+        container.innerHTML = `<div class="status-placeholder">No message matches the current filters.</div>`;
         return;
     }
 
-    const messages = record.messages.filter((message) => messageMatches(message, runtime.messageFilter));
-    if (!record.messages.length) {
-        list.innerHTML = `<div class="placeholder">No message node was found for this device.<br>The feed stays empty when the database does not store SMS.</div>`;
-        return;
-    }
-    if (!messages.length) {
-        list.innerHTML = `<div class="placeholder">No message matches the current filter.</div>`;
-        return;
-    }
-
-    list.innerHTML = messages
+    container.innerHTML = list
         .map((message) => {
             const peer = message.direction === "in" ? message.from : message.to;
-            const body = message.body || "(empty message)";
             const when = message.ts ? relativeTime(message.ts) : "no timestamp";
-            const title = message.ts ? formatTimestamp(message.ts) : "no timestamp";
+            const exact = message.ts ? formatTimestamp(message.ts) : "no timestamp";
             return `
-            <article class="message message-${esc(message.direction)}">
-                <div class="message-head">
-                    <span class="message-peer">
-                        <span class="badge badge-${esc(message.direction)}">${message.direction === "in" ? "IN" : "OUT"}</span>
-                        ${esc(peer || "unknown")}
+            <article class="sms-row sms-${esc(message.direction)}">
+                <div class="sms-head">
+                    <span class="sms-peer">
+                        <span class="sms-tag sms-tag-${esc(message.direction)}">${
+                            message.direction === "in" ? "IN" : "OUT"
+                        }</span>
+                        <span>${esc(peer || "unknown")}</span>
                     </span>
-                    <span class="message-time" title="${esc(title)}">${esc(when)}</span>
+                    <span class="sms-time" title="${esc(exact)}">${esc(when)}</span>
                 </div>
-                <div class="message-body${message.body ? "" : " message-empty"}">${esc(body)}</div>
-                ${message.body ? `<div class="message-actions"><button class="link-btn" type="button" data-copy="${esc(message.body)}">copy</button></div>` : ""}
+                <div class="sms-body${message.body ? "" : " sms-body-empty"}">${esc(
+                    message.body || "(empty message)",
+                )}</div>
+                <div class="sms-actions">
+                    <span class="text-[8.5px] font-mono text-slate-600 uppercase">${
+                        message.deviceId === "unassigned" ? "unassigned" : esc(message.deviceId)
+                    }</span>
+                    <button type="button" class="sms-link" data-copy-text="${esc(message.body || "")}">copy</button>
+                    ${
+                        message.deviceId !== "unassigned"
+                            ? `<button type="button" class="sms-link" data-open-device="${esc(
+                                  message.deviceId,
+                              )}">device</button>`
+                            : ""
+                    }
+                </div>
             </article>`;
         })
         .join("");
 }
 
 function renderDatabases() {
-    const container = $("dbList");
-    const modals = $("dbModalList");
-    const current = runtime.activeUrl;
-
     const itemMarkup = (entry) => {
-        const active = entry.url === current;
+        const active = entry.url === runtime.activeUrl;
         return `
-        <div class="db-item ${active ? "db-item-active" : ""}">
-            <div class="db-info">
-                <div class="db-name">${esc(entry.label || databaseLabel(entry.url))}</div>
-                <div class="db-url">${esc(entry.url)}</div>
+        <div class="db-row ${active ? "db-row-active" : ""}">
+            <div class="db-row-info">
+                <div class="db-row-name">${esc(entry.label || databaseLabel(entry.url))}</div>
+                <div class="db-row-url">${esc(entry.url)}</div>
             </div>
-            <div class="db-actions">
-                <button class="mini-btn" type="button" data-db-use="${esc(entry.url)}">${active ? "active" : "use"}</button>
-                <button class="mini-btn danger" type="button" data-db-remove="${esc(entry.url)}">×</button>
+            <div class="db-row-actions">
+                <button type="button" class="db-action-mini ${active ? "db-action-active" : ""}" data-db-use="${esc(
+                    entry.url,
+                )}">${active ? "active" : "use"}</button>
+                <button type="button" class="db-action-mini db-action-danger" data-db-remove="${esc(
+                    entry.url,
+                )}">×</button>
             </div>
         </div>`;
     };
 
     const html = store.databases.length
         ? store.databases.map(itemMarkup).join("")
-        : `<div class="placeholder">None saved yet. Add one above.</div>`;
+        : `<div class="status-placeholder">None saved yet.</div>`;
 
-    container.innerHTML = html;
-    modals.innerHTML = html;
-
-    $("layoutDetails").textContent = runtime.layout
-        ? [
-            `root keys: ${runtime.layout.rootKeys.join(", ") || "—"}`,
-            `device node: ${runtime.layout.devicePath || "not detected"}`,
-            `message source: ${runtime.layout.messageSource.type}${
-                runtime.layout.messageSource.path ? ` (${runtime.layout.messageSource.path})` : ""
-            }`,
-            runtime.layout.rejected.length
-                ? `skipped nodes: ${runtime.layout.rejected.map((r) => `${r.path} [${r.reason}]`).join(", ")}`
-                : "skipped nodes: none",
-        ].join("\n")
-        : "Connect a database to inspect its structure.";
+    for (const id of ["dbListContainer", "dbListContainer2"]) {
+        const node = $(id);
+        if (node) node.innerHTML = html;
+    }
 }
 
 function renderLayoutDetails() {
-    /* included in renderDatabases */
+    const node = $("layoutDetails");
+    if (!node) return;
+    node.textContent = runtime.layout
+        ? [
+              `root keys     : ${runtime.layout.rootKeys.join(", ") || "—"}`,
+              `device node   : ${runtime.layout.devicePath || "not detected"}`,
+              `message source: ${runtime.layout.messageSource.type}${
+                  runtime.layout.messageSource.path ? ` (${runtime.layout.messageSource.path})` : ""
+              }`,
+              `messages read : ${runtime.messages.length}${runtime.messageSourceLabel ? ` via ${runtime.messageSourceLabel}` : ""}`,
+              `skipped nodes : ${runtime.layout.rejected.length ? runtime.layout.rejected.join(", ") : "none"}`,
+          ].join("\n")
+        : "Connect a database to inspect its structure.";
 }
 
-function addDatabase(url, label) {
-    const normalized = normalizeDatabaseUrl(url);
-    if (!normalized) {
-        setNotice("dbFeedback", "That does not look like a database URL.", "error");
-        return null;
-    }
-    const existing = store.databases.find((entry) => entry.url === normalized);
-    if (existing) {
-        if (label) existing.label = label;
-        saveStore();
-        return normalized;
-    }
-    store.databases.push({ url: normalized, label: label || "", addedAt: Date.now() });
-    saveStore();
-    return normalized;
-}
+/* ---------------------------- device sheet -------------------------- */
 
-function removeDatabase(url) {
-    store.databases = store.databases.filter((entry) => entry.url !== url);
-    if (store.activeUrl === url) {
-        store.activeUrl = "";
-        runtime.connection = null;
-        runtime.connected = false;
-        runtime.layout = null;
-        runtime.devices = [];
-        runtime.deviceById.clear();
-        runtime.messagesByDevice.clear();
-        setConnectionState("idle", "not connected");
-    }
-    saveStore();
-    renderAll();
-}
+function openDevice(deviceId) {
+    const device = runtime.deviceById.get(deviceId);
+    if (!device) return;
 
-/* ---------------------------- device detail -------------------------- */
-
-function renderDeviceModal(device) {
-    const content = $("deviceModalContent");
     $("deviceModalTitle").textContent = device.id;
     $("deviceModalSub").textContent = device.modelName || "unknown model";
 
@@ -713,159 +911,215 @@ function renderDeviceModal(device) {
         ["Android", device.androidV || "—"],
         ["IP", device.ip || "—"],
         ["Serial", device.serial || "—"],
-        ["Registered", device.lastSeen ? relativeTime(device.lastSeen) : "—"],
+        ["Messages", String(runtime.messageIndex.get(device.id)?.length || 0)],
     ];
 
     const sims = device.sims.length
         ? device.sims
               .map(
                   (sim) => `
-            <div class="sim-card">
-                <div class="sim-head">SIM slot ${esc(sim.slot ?? "?")}</div>
-                <div class="kv"><span class="kv-key">Number</span><span class="kv-val">${esc(sim.number || "—")}</span></div>
-                <div class="kv"><span class="kv-key">Carrier</span><span class="kv-val">${esc(sim.carrier || "—")}</span></div>
-                <div class="kv"><span class="kv-key">ICCID</span><span class="kv-val">${esc(sim.iccid || "—")}</span></div>
-                ${sim.type ? `<div class="kv"><span class="kv-key">Type</span><span class="kv-val">${esc(sim.type)}</span></div>` : ""}
+            <div class="sim-block">
+                <div class="sim-block-title">SIM slot ${esc(sim.slot ?? "?")}</div>
+                <div class="kv-row"><span class="kv-key">Number</span><span class="kv-val">${esc(sim.number || "—")}</span></div>
+                <div class="kv-row"><span class="kv-key">Carrier</span><span class="kv-val">${esc(sim.carrier || "—")}</span></div>
+                <div class="kv-row"><span class="kv-key">ICCID</span><span class="kv-val">${esc(sim.iccid || "—")}</span></div>
+                ${sim.type ? `<div class="kv-row"><span class="kv-key">Type</span><span class="kv-val">${esc(sim.type)}</span></div>` : ""}
             </div>`,
               )
               .join("")
-        : `<div class="placeholder">No SIM details recorded.</div>`;
+        : `<div class="result-empty">No SIM details recorded.</div>`;
 
-    content.innerHTML = `
+    $("deviceModalContent").innerHTML = `
         ${rows
             .map(
                 ([key, value]) =>
-                    `<div class="kv"><span class="kv-key">${esc(key)}</span><span class="kv-val">${esc(value)}</span></div>`,
+                    `<div class="kv-row"><span class="kv-key">${esc(key)}</span><span class="kv-val">${esc(value)}</span></div>`,
             )
             .join("")}
-        <div class="card-head" style="margin-top:12px"><span class="section-title">SIMs</span></div>
+        <div class="pt-1"><h3 class="section-title px-1">SIM Slots</h3></div>
         ${sims}
-        <div class="form-actions" style="margin-top:12px">
-            <button class="btn btn-primary" type="button" data-messages-for="${esc(device.id)}">Open message feed</button>
-            <button class="btn btn-ghost" type="button" data-copy="${esc(device.id)}">Copy device ID</button>
+        <div class="card-actions pt-1">
+            <button type="button" class="card-btn" data-logs="${esc(device.id)}">
+                <span class="material-icons">forum</span>Open log feed
+            </button>
+            <button type="button" class="card-btn card-btn-lookup" data-lookup="${esc(device.id)}">
+                <span class="material-icons">travel_explore</span>Lookup number
+            </button>
+            <button type="button" class="card-btn" data-copy-text="${esc(device.id)}">
+                <span class="material-icons">content_copy</span>Copy ID
+            </button>
         </div>
-        <details class="card card-muted" style="margin-top:10px">
-            <summary class="section-title">Raw record</summary>
-            <pre class="code-block">${esc(JSON.stringify(device.raw, null, 2))}</pre>
+        <details class="bg-slate-950/60 border border-slate-900 rounded-xl p-2">
+            <summary class="text-[9px] font-mono font-bold text-slate-500 uppercase tracking-wider cursor-pointer">Raw record</summary>
+            <pre class="code-block mt-2">${esc(JSON.stringify(device.raw, null, 2))}</pre>
         </details>`;
+
     openModal("deviceModal");
 }
 
-/* ------------------------------ lookup ------------------------------- */
+/* ---------------------------- per-device lookup ---------------------- */
+
+async function lookupForDevice(deviceId) {
+    const device = runtime.deviceById.get(deviceId);
+    if (!device) return;
+    if (!device.phoneNumber) {
+        toast("This device has no phone number recorded.", "error");
+        return;
+    }
+
+    $("deviceLookupSub").textContent = `${device.id} · ${device.phoneNumber}`;
+    $("deviceLookupContent").innerHTML = `<div class="result-empty">Checking ${esc(
+        device.phoneNumber,
+    )}…</div>`;
+    openModal("deviceLookupModal");
+
+    try {
+        const result = await checkMobile(device.phoneNumber, {
+            endpoint: $("lookupEndpoint").value.trim() || DEFAULT_LOOKUP_ENDPOINT,
+            token: $("lookupToken").value.trim(),
+            initData: $("lookupInitData").value,
+        });
+        $("deviceLookupContent").innerHTML = renderLookupBody(result);
+    } catch (error) {
+        const message = error instanceof LookupError ? error.message : "The lookup failed.";
+        $("deviceLookupContent").innerHTML = `<div class="notice-error text-[10px] font-mono leading-relaxed rounded-xl border px-3 py-2">${esc(
+            message,
+        )}</div>`;
+    }
+}
+
+function renderLookupBody(result) {
+    const flat = flattenResult(result.data);
+    const rows = flat.length
+        ? flat
+              .map(
+                  ([key, value]) =>
+                      `<div class="kv-row"><span class="kv-key">${esc(key)}</span><span class="kv-val">${esc(
+                          value === null || value === undefined ? "null" : String(value),
+                      )}</span></div>`,
+              )
+              .join("")
+        : `<div class="result-empty">The endpoint returned an empty payload.</div>`;
+
+    return `
+        <div class="flex items-center justify-between">
+            <span class="section-title">Result</span>
+            <span class="text-[8px] font-mono text-slate-600">HTTP ${result.status} · ${result.ms} ms</span>
+        </div>
+        ${rows}
+        <details class="bg-slate-950/60 border border-slate-900 rounded-xl p-2">
+            <summary class="text-[9px] font-mono font-bold text-slate-500 uppercase tracking-wider cursor-pointer">Raw response</summary>
+            <pre class="code-block mt-2">${esc(
+                typeof result.data === "string" ? result.data : JSON.stringify(result.data, null, 2),
+            )}</pre>
+        </details>`;
+}
+
+/* ------------------------------ lookup tab -------------------------- */
+
+function renderLookupToggle() {
+    $("lookupToggleBtn").setAttribute("aria-pressed", String(store.lookupEnabled));
+}
 
 function renderLookupPreview() {
     const endpoint = $("lookupEndpoint").value.trim() || DEFAULT_LOOKUP_ENDPOINT;
     const token = $("lookupToken").value.trim() || "<token>";
     const mobile = $("lookupMobile").value.trim() || "<mobile>";
     const initData = $("lookupInitData").value;
-    $("lookupPreview").textContent =
-        `POST ${endpoint}\n` +
-        `Content-Type: application/json\n` +
-        `x-token: ${token}\n\n` +
-        JSON.stringify({ mobile, token, initData }, null, 2);
+    const preview = $("lookupPreview");
+    if (!preview) return;
+    preview.textContent = `POST ${endpoint}\nx-token: ${token}\n\n${JSON.stringify(
+        { mobile, token, initData },
+        null,
+        2,
+    )}`;
 }
 
-function renderLookupResult(result) {
-    const container = $("lookupResult");
-    container.classList.remove("hidden");
-
-    const flat = flattenResult(result.data);
-    const rows = flat.length
-        ? flat
-              .map(
-                  ([key, value]) =>
-                      `<div class="kv"><span class="kv-key">${esc(key)}</span><span class="kv-val">${esc(
-                          value === null || value === undefined ? "null" : String(value),
-                      )}</span></div>`,
-              )
-              .join("")
-        : `<div class="placeholder">The endpoint returned an empty payload.</div>`;
-
-    container.innerHTML = `
-        <div class="card-head">
-            <span class="section-title">Result</span>
-            <span class="section-hint">HTTP ${result.status} · ${result.ms} ms</span>
-        </div>
-        ${rows}
-        <details class="card card-muted" style="margin-top:10px">
-            <summary class="section-title">Raw response</summary>
-            <pre class="code-block">${esc(
-                typeof result.data === "string" ? result.data : JSON.stringify(result.data, null, 2),
-            )}</pre>
-        </details>`;
+function setLookupStatus(message, kind = "info") {
+    const node = $("lookupStatus");
+    if (!message) {
+        node.className = "hidden";
+        node.textContent = "";
+        return;
+    }
+    node.className = `notice-${kind} text-[10px] font-mono leading-relaxed rounded-xl border px-3 py-2`;
+    node.textContent = message;
 }
 
 async function submitLookup(event) {
-    event.preventDefault();
+    event?.preventDefault();
     const mobile = $("lookupMobile").value.trim();
     const endpoint = $("lookupEndpoint").value.trim() || DEFAULT_LOOKUP_ENDPOINT;
     const token = $("lookupToken").value.trim();
     const initData = $("lookupInitData").value;
 
-    $("lookupResult").classList.add("hidden");
+    hide("lookupResult");
     $("lookupSubmit").disabled = true;
-    setNotice("lookupStatus", "Checking…", "info");
+    setLookupStatus("Checking…", "info");
 
     try {
         const result = await checkMobile(mobile, { endpoint, token, initData });
-        setNotice("lookupStatus", `Done in ${result.ms} ms (HTTP ${result.status}).`, "success");
-        renderLookupResult(result);
+        setLookupStatus(`Done in ${result.ms} ms (HTTP ${result.status}).`, "success");
+        const node = $("lookupResult");
+        node.innerHTML = renderLookupBody(result);
+        node.classList.remove("hidden");
     } catch (error) {
-        const message =
-            error instanceof LookupError ? error.message : "The lookup failed unexpectedly.";
-        setNotice("lookupStatus", message, "error");
+        setLookupStatus(
+            error instanceof LookupError ? error.message : "The lookup failed unexpectedly.",
+            "error",
+        );
     } finally {
         $("lookupSubmit").disabled = false;
     }
 }
 
-/* --------------------------- global search --------------------------- */
+/* ---------------------------- global search ------------------------- */
 
-function renderSearchResults(query) {
+function renderGlobalSearch(query) {
     const container = $("globalSearchResults");
+    const count = $("globalSearchCount");
     const q = query.trim();
 
     if (!q) {
-        container.innerHTML = `<div class="placeholder">Type to search the loaded devices and messages.</div>`;
+        container.innerHTML = `<div class="text-[10px] font-mono text-slate-600 text-center py-8">Type to search across every device and message in this database.</div>`;
+        count.textContent = "0 results";
         return;
     }
 
-    const devices = runtime.devices.filter((device) => deviceMatches(device, q)).slice(0, 25);
-    const messages = [];
-    for (const [deviceId, record] of runtime.messagesByDevice) {
-        for (const message of record.messages) {
-            if (messageMatches(message, q)) messages.push({ deviceId, message });
-        }
-    }
-    const topMessages = messages.slice(0, 25);
+    const devices = runtime.devices.filter((device) => deviceMatches(device, q)).slice(0, 20);
+    const messages = runtime.messages.filter((message) => messageMatches(message, q)).slice(0, 20);
 
     const deviceBlock = devices.length
-        ? `<div class="section-title" style="padding:4px 2px">Devices (${devices.length})</div>` +
+        ? `<div class="text-[9px] font-mono font-bold text-slate-500 uppercase tracking-wider px-1 pt-1">Devices (${devices.length})</div>` +
           devices
               .map(
                   (device) => `
-            <button class="db-item" style="width:100%;text-align:left;cursor:pointer" type="button" data-device="${esc(device.id)}">
-                <div class="db-info">
-                    <div class="db-name">${esc(device.id)}</div>
-                    <div class="db-url">${esc(device.modelName || "unknown model")} · ${esc(device.phoneNumber || "no number")} · ${esc(device.status)}</div>
-                </div>
-                <span class="mini-btn">open</span>
+            <button type="button" class="sidebar-device" data-select="${esc(device.id)}">
+                <span class="sd-dot status-dot-${esc(device.status)}"></span>
+                <span class="min-w-0 flex-1">
+                    <span class="sd-id">${esc(device.id)}</span>
+                    <span class="sd-meta">${esc(device.modelName || "unknown")} · ${esc(
+                        device.phoneNumber || "no number",
+                    )} · ${esc(device.status)}</span>
+                </span>
             </button>`,
               )
               .join("")
         : "";
 
-    const messageBlock = topMessages.length
-        ? `<div class="section-title" style="padding:10px 2px 4px">Messages (${messages.length}${messages.length > topMessages.length ? `, showing ${topMessages.length}` : ""})</div>` +
-          topMessages
+    const messageBlock = messages.length
+        ? `<div class="text-[9px] font-mono font-bold text-slate-500 uppercase tracking-wider px-1 pt-2">Messages (${messages.length})</div>` +
+          messages
               .map(
-                  ({ deviceId, message }) => `
-            <button class="db-item" style="width:100%;text-align:left;cursor:pointer" type="button" data-messages-for="${esc(deviceId)}">
-                <div class="db-info">
-                    <div class="db-name">${esc(message.direction === "in" ? message.from : message.to) || "unknown"}</div>
-                    <div class="db-url">${esc((message.body || "(empty)").slice(0, 80))}</div>
-                    <div class="db-url">${esc(deviceId)} · ${esc(message.ts ? relativeTime(message.ts) : "no timestamp")}</div>
-                </div>
+                  (message) => `
+            <button type="button" class="sidebar-device" data-logs="${esc(message.deviceId)}">
+                <span class="min-w-0 flex-1">
+                    <span class="sd-id">${esc(message.direction === "in" ? message.from : message.to) || "unknown"}</span>
+                    <span class="sd-meta">${esc((message.body || "(empty)").slice(0, 70))}</span>
+                    <span class="sd-meta">${esc(message.deviceId)} · ${esc(
+                        message.ts ? relativeTime(message.ts) : "no timestamp",
+                    )}</span>
+                </span>
             </button>`,
               )
               .join("")
@@ -873,160 +1127,253 @@ function renderSearchResults(query) {
 
     container.innerHTML =
         deviceBlock + messageBlock ||
-        `<div class="placeholder">Nothing matched “${esc(q)}”.</div>`;
+        `<div class="text-[10px] font-mono text-slate-600 text-center py-8">Nothing matched “${esc(q)}”.</div>`;
+    const total = devices.length + messages.length;
+    count.textContent = `${total} result${total === 1 ? "" : "s"}`;
 }
 
 /* ==================================================================== *
- * Navigation + events
+ * Navigation / tabs
  * ==================================================================== */
+
+const TAB_IDS = ["clients", "messages", "lookup", "data"];
 
 function switchTab(tab) {
     runtime.tab = tab;
-    for (const name of ["devices", "messages", "lookup", "databases"]) {
-        $(`tab-${name}`).classList.toggle("hidden", name !== tab);
-        $(`nav${name[0].toUpperCase()}${name.slice(1)}`).classList.toggle("nav-active", name === tab);
+    for (const name of TAB_IDS) {
+        const panel = $(`tabContent-${name}`);
+        if (panel) panel.classList.toggle("hidden", name !== tab);
+        const btn = $(`bottomTabBtn-${name}`);
+        if (btn) {
+            btn.classList.toggle("bottom-nav-active", name === tab);
+            btn.classList.toggle("bottom-nav-inactive", name !== tab);
+        }
     }
-    if (tab === "lookup") renderLookupPreview();
+    if (tab === "messages") renderMessages();
 }
 
-function selectDevice(deviceId, { goToMessages = false } = {}) {
-    runtime.selectedDeviceId = deviceId;
-    const device = runtime.deviceById.get(deviceId);
-    if (!device) return;
+function openLogs(deviceId) {
+    runtime.selectedDeviceId = deviceId && runtime.deviceById.has(deviceId) ? deviceId : "";
+    runtime.messageDeviceFilter = runtime.selectedDeviceId;
+    $("messageDeviceFilter").value = runtime.messageDeviceFilter;
+    switchTab("messages");
+    renderMessages();
+    renderSidebar();
+    closeModal("deviceModal");
+    closeModal("globalSearchModal");
+}
 
-    if (goToMessages) {
-        switchTab("messages");
-        renderMessages();
-        loadMessagesFor(deviceId).then(() => {
-            if (runtime.selectedDeviceId === deviceId) renderMessages();
-        });
+/* ==================================================================== *
+ * Databases
+ * ==================================================================== */
+
+function addDatabase(url, label) {
+    const normalized = normalizeDatabaseUrl(url);
+    if (!normalized) {
+        setDbFeedback("That does not look like a database URL.", true);
+        return null;
+    }
+    const existing = store.databases.find((entry) => entry.url === normalized);
+    if (existing) {
+        if (label) existing.label = label;
     } else {
-        renderDeviceModal(device);
-        if (!runtime.messagesByDevice.has(deviceId)) {
-            loadMessagesFor(deviceId).catch(() => {});
+        store.databases.push({ url: normalized, label: label || "", addedAt: Date.now() });
+    }
+    saveStore();
+    renderDatabases();
+    return normalized;
+}
+
+function setDbFeedback(message, isError = false) {
+    for (const id of ["dbAddFeedback", "dbAddFeedback2"]) {
+        const node = $(id);
+        if (!node) continue;
+        if (!message) {
+            node.classList.add("hidden");
+            node.textContent = "";
+            continue;
         }
+        node.classList.remove("hidden");
+        node.textContent = message;
+        node.className = `text-[9px] font-mono ${isError ? "text-rose-400" : "text-slate-400"}`;
     }
 }
 
-function wireEvents() {
-    // Tabs
-    $("navDevices").addEventListener("click", () => switchTab("devices"));
-    $("navMessages").addEventListener("click", () => switchTab("messages"));
-    $("navLookup").addEventListener("click", () => switchTab("lookup"));
-    $("navDatabases").addEventListener("click", () => switchTab("databases"));
+function removeDatabase(url) {
+    store.databases = store.databases.filter((entry) => entry.url !== url);
+    if (store.activeUrl === url) {
+        store.activeUrl = "";
+        runtime.connection = null;
+        runtime.connected = false;
+        runtime.devices = [];
+        runtime.messages = [];
+        runtime.deviceById.clear();
+        runtime.messageIndex.clear();
+        updateDbHeader("");
+        setConnectionPill("idle", "IDLE");
+        setLoadStatus("Disconnected.");
+        setSchemaBadge("no schema");
+        setProgress(0);
+    }
+    saveStore();
+    renderEverything();
+}
 
-    // Devices
-    $("deviceFilter").addEventListener("input", (event) => {
-        runtime.filter = event.target.value;
-        renderStats();
+/* ==================================================================== *
+ * Wiring
+ * ==================================================================== */
+
+function closeAllModals() {
+    for (const id of [
+        "dbManagerModal",
+        "deviceModal",
+        "deviceLookupModal",
+        "globalSearchModal",
+    ]) {
+        closeModal(id);
+    }
+}
+
+function wire() {
+    // tabs
+    for (const name of TAB_IDS) {
+        $(`bottomTabBtn-${name}`)?.addEventListener("click", () => switchTab(name));
+    }
+
+    // header
+    $("lookupToggleBtn").addEventListener("click", () => {
+        store.lookupEnabled = !store.lookupEnabled;
+        saveStore();
+        renderLookupToggle();
         renderDevices();
+        toast(
+            store.lookupEnabled
+                ? "Lookup buttons enabled on device cards."
+                : "Lookup buttons hidden from device cards.",
+            "success",
+            2000,
+        );
     });
-    $("statusFilter").addEventListener("change", (event) => {
-        runtime.statusFilter = event.target.value;
-        renderStats();
-        renderDevices();
+    $("globalSearchBtn").addEventListener("click", () => {
+        $("globalSearchInput").value = "";
+        renderGlobalSearch("");
+        openModal("globalSearchModal");
+        $("globalSearchInput").focus();
     });
-    $("deviceGrid").addEventListener("click", (event) => {
-        const card = event.target.closest("[data-device]");
-        if (card) selectDevice(card.dataset.device);
+    $("openDbManagerBtn").addEventListener("click", () => {
+        renderDatabases();
+        openModal("dbManagerModal");
+    });
+    $("exportDataBtn").addEventListener("click", () => {
+        if (!runtime.connected) return toast("Connect a database first.", "error");
+        const payload = {
+            database: runtime.activeUrl,
+            exportedAt: new Date().toISOString(),
+            layout: runtime.layout
+                ? {
+                      devicePath: runtime.layout.devicePath,
+                      messageSource: runtime.layout.messageSource,
+                      rootKeys: runtime.layout.rootKeys,
+                  }
+                : null,
+            devices: runtime.devices.map((device) => ({ ...device, raw: device.raw })),
+            messages: runtime.messages.map((message) => ({
+                deviceId: message.deviceId,
+                direction: message.direction,
+                from: message.from,
+                to: message.to,
+                body: message.body,
+                ts: message.ts,
+            })),
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `firebase-manager-${Date.now()}.json`;
+        link.click();
+        URL.revokeObjectURL(link.href);
+        toast("Export downloaded.", "success", 2000);
     });
 
-    // Messages
-    $("messageFilter").addEventListener("input", (event) => {
-        runtime.messageFilter = event.target.value;
+    // filters
+    $("deviceSearchInput").addEventListener("input", (event) => {
+        runtime.deviceQuery = event.target.value;
+        renderDevices();
+        renderSidebar();
+        renderStats();
+    });
+    $("panelSearchInput").addEventListener("input", (event) => {
+        runtime.panelQuery = event.target.value;
+        renderDevices();
+        renderSidebar();
+        renderStats();
         renderMessages();
     });
-    $("messageBackBtn").addEventListener("click", () => switchTab("devices"));
-    $("refreshMessagesBtn").addEventListener("click", async () => {
-        const id = runtime.selectedDeviceId;
-        if (!id) return toast("Select a device first.", "error");
-        await loadMessagesFor(id, { force: true });
-        if (runtime.selectedDeviceId === id) renderMessages();
-    });
-    $("messageList").addEventListener("click", (event) => {
-        const copy = event.target.closest("[data-copy]");
-        if (copy) copyText(copy.dataset.copy, "Message copied");
-    });
+    for (const status of ["all", "online", "offline"]) {
+        $(`statusFilterBtn-${status}`).addEventListener("click", () => {
+            runtime.statusFilter = status;
+            for (const other of ["all", "online", "offline"]) {
+                const btn = $(`statusFilterBtn-${other}`);
+                btn.className = `subtab-pill ${
+                    other === status ? "subtab-pill-active" : "subtab-pill-inactive"
+                }`;
+            }
+            renderDevices();
+            renderSidebar();
+            renderStats();
+        });
+    }
 
-    // Device modal
-    $("deviceModalContent").addEventListener("click", (event) => {
-        const copy = event.target.closest("[data-copy]");
-        if (copy) copyText(copy.dataset.copy, "Copied");
-        const feed = event.target.closest("[data-messages-for]");
-        if (feed) {
-            closeModal("deviceModal");
-            selectDevice(feed.dataset.messagesFor, { goToMessages: true });
-        }
-    });
-
-    // Databases
-    $("addDbForm").addEventListener("submit", async (event) => {
-        event.preventDefault();
-        const url = $("dbUrlInput").value.trim();
-        const label = $("dbLabelInput").value.trim();
-        const normalized = addDatabase(url, label);
-        if (!normalized) return;
-        $("dbUrlInput").value = "";
-        $("dbLabelInput").value = "";
-        renderDatabases();
-        await connect(normalized);
-    });
-
-    const dbClickHandler = async (event) => {
-        const use = event.target.closest("[data-db-use]");
-        if (use) {
-            closeModal("dbModal");
-            switchTab("devices");
-            await connect(use.dataset.dbUse);
-            return;
-        }
-        const remove = event.target.closest("[data-db-remove]");
-        if (remove) {
-            removeDatabase(remove.dataset.dbRemove);
-            return;
-        }
-        const card = event.target.closest("[data-device]");
-        if (card) {
-            closeModal("searchModal");
-            switchTab("devices");
-            selectDevice(card.dataset.device);
-            return;
-        }
-        const feed = event.target.closest("[data-messages-for]");
-        if (feed) {
-            closeModal("searchModal");
-            selectDevice(feed.dataset.messagesFor, { goToMessages: true });
-        }
+    // drawer
+    const openDrawer = () => {
+        $("deviceSidebarSection").classList.remove("-translate-x-full");
+        $("drawerBackdropOverlay").classList.remove("hidden");
     };
+    const closeDrawer = () => {
+        $("deviceSidebarSection").classList.add("-translate-x-full");
+        $("drawerBackdropOverlay").classList.add("hidden");
+    };
+    $("menuDrawerToggleBtn").addEventListener("click", openDrawer);
+    $("closeDrawerBtn").addEventListener("click", closeDrawer);
+    $("drawerBackdropOverlay").addEventListener("click", closeDrawer);
 
-    $("dbList").addEventListener("click", dbClickHandler);
-    $("dbModalList").addEventListener("click", dbClickHandler);
-    $("globalSearchResults").addEventListener("click", dbClickHandler);
-
-    $("dbManagerBtn").addEventListener("click", () => {
-        renderDatabases();
-        openModal("dbModal");
-    });
-    $("connectionPill").addEventListener("click", () => {
-        renderDatabases();
-        openModal("dbModal");
-    });
-    $("reloadBtn").addEventListener("click", async () => {
+    // reload / message sync
+    $("reloadDataBtn").addEventListener("click", async () => {
         if (!runtime.activeUrl) return toast("Add a database first.", "error");
         await connect(runtime.activeUrl);
     });
-
-    // Search overlay
-    $("searchBtn").addEventListener("click", () => {
-        openModal("searchModal");
-        $("globalSearchInput").value = "";
-        renderSearchResults("");
+    $("refreshMessagesBtn").addEventListener("click", async () => {
+        if (!runtime.connected) return toast("Connect a database first.", "error");
+        $("refreshMessagesBtn").disabled = true;
+        setLoadStatus("Re-syncing message logs…");
+        try {
+            await loadMessages({ force: true });
+            renderMessages();
+            renderMessageDeviceFilter();
+            renderStats();
+            $("smsLastSyncLabel").textContent = `synced ${relativeTime(Date.now())}`;
+            setLoadStatus(`Synced · ${runtime.devices.length} devices · ${runtime.messages.length} messages`);
+            toast(`${runtime.messages.length} message(s) loaded.`, "success", 2200);
+        } catch (error) {
+            toast(error?.message || "Message sync failed.", "error");
+        } finally {
+            $("refreshMessagesBtn").disabled = false;
+        }
     });
-    $("globalSearchInput").addEventListener("input", (event) =>
-        renderSearchResults(event.target.value),
-    );
 
-    // Lookup
+    // message filters
+    $("messageDeviceFilter").addEventListener("change", (event) => {
+        runtime.messageDeviceFilter = event.target.value;
+        runtime.selectedDeviceId = event.target.value;
+        renderMessages();
+        renderSidebar();
+    });
+    $("messageDirectionFilter").addEventListener("change", (event) => {
+        runtime.messageDirectionFilter = event.target.value;
+        renderMessages();
+    });
+
+    // lookup tab
     $("lookupForm").addEventListener("submit", submitLookup);
     for (const id of ["lookupEndpoint", "lookupToken", "lookupMobile", "lookupInitData"]) {
         $(id).addEventListener("input", renderLookupPreview);
@@ -1038,18 +1385,99 @@ function wireEvents() {
             initData: $("lookupInitData").value,
         };
         saveStore();
-        toast("Lookup settings saved in this browser.", "success");
+        toast("Lookup settings saved in this browser.", "success", 2200);
     });
 
-    // Generic modal handling
+    // database forms (bottom tab + modal)
+    const addFrom = (urlId, labelId) => {
+        const url = $(urlId).value.trim();
+        const label = $(labelId).value.trim();
+        const normalized = addDatabase(url, label);
+        if (!normalized) return;
+        $(urlId).value = "";
+        $(labelId).value = "";
+        setDbFeedback("");
+        closeModal("dbManagerModal");
+        switchTab("clients");
+        connect(normalized);
+    };
+    $("dbAddBtn").addEventListener("click", () => addFrom("dbUrlInput2", "dbLabelInput2"));
+    $("dbAddBtn2").addEventListener("click", () => addFrom("dbUrlInput", "dbLabelInput"));
+
+    // delegated clicks on lists / cards
     document.addEventListener("click", (event) => {
-        const closer = event.target.closest("[data-close]");
-        if (closer) closeModal(closer.dataset.close);
+        const target = event.target.closest("[data-device], [data-select], [data-logs], [data-lookup]");
+        if (!target) return;
+
+        if (target.dataset.copyText !== undefined) return;
+
+        if (target.dataset.lookup) {
+            event.stopPropagation();
+            lookupForDevice(target.dataset.lookup);
+            return;
+        }
+        if (target.dataset.logs) {
+            event.stopPropagation();
+            openLogs(target.dataset.logs);
+            return;
+        }
+        if (target.dataset.select) {
+            const id = target.dataset.select;
+            openLogs(id);
+            if (window.innerWidth < 768) closeDrawer();
+            return;
+        }
+        if (target.dataset.device) {
+            openDevice(target.dataset.device);
+        }
     });
+
+    document.addEventListener("click", (event) => {
+        const copy = event.target.closest("[data-copy-text]");
+        if (copy) {
+            event.stopPropagation();
+            const value = copy.getAttribute("data-copy-text");
+            copyText(value, "Copied");
+            return;
+        }
+        const openDeviceBtn = event.target.closest("[data-open-device]");
+        if (openDeviceBtn) openDevice(openDeviceBtn.dataset.openDevice);
+    });
+
+    // database list actions
+    for (const id of ["dbListContainer", "dbListContainer2"]) {
+        $(id).addEventListener("click", async (event) => {
+            const use = event.target.closest("[data-db-use]");
+            if (use) {
+                closeModal("dbManagerModal");
+                switchTab("clients");
+                await connect(use.dataset.dbUse);
+                return;
+            }
+            const remove = event.target.closest("[data-db-remove]");
+            if (remove) removeDatabase(remove.dataset.dbRemove);
+        });
+    }
+
+    // modals
+    $("closeDbManagerBtn").addEventListener("click", () => closeModal("dbManagerModal"));
+    $("dbManagerBackdrop").addEventListener("click", () => closeModal("dbManagerModal"));
+    $("closeDeviceModalBtn").addEventListener("click", () => closeModal("deviceModal"));
+    $("deviceModalBackdrop").addEventListener("click", () => closeModal("deviceModal"));
+    $("closeDeviceLookupBtn").addEventListener("click", () => closeModal("deviceLookupModal"));
+    $("deviceLookupBackdrop").addEventListener("click", () => closeModal("deviceLookupModal"));
+    $("closeGlobalSearchBtn").addEventListener("click", () => closeModal("globalSearchModal"));
+    $("globalSearchBackdrop").addEventListener("click", () => closeModal("globalSearchModal"));
+
+    $("globalSearchInput").addEventListener("input", (event) =>
+        renderGlobalSearch(event.target.value),
+    );
+
     document.addEventListener("keydown", (event) => {
-        if (event.key !== "Escape") return;
-        for (const id of ["deviceModal", "dbModal", "searchModal"]) closeModal(id);
+        if (event.key === "Escape") closeAllModals();
     });
+
+    $("globalSearchResults").addEventListener("click", () => closeModal("globalSearchModal"));
 }
 
 /* ==================================================================== *
@@ -1057,15 +1485,16 @@ function wireEvents() {
  * ==================================================================== */
 
 function boot() {
-    wireEvents();
-    switchTab("devices");
+    wire();
 
     $("lookupEndpoint").value = store.lookup.endpoint || DEFAULT_LOOKUP_ENDPOINT;
     $("lookupToken").value = store.lookup.token || "";
     $("lookupInitData").value = store.lookup.initData || "";
-    renderLookupPreview();
 
-    renderAll();
+    renderEverything();
+    switchTab("clients");
+    setConnectionPill("idle", "IDLE");
+    setLoadStatus("No database connected.");
 
     const requested = new URLSearchParams(location.search).get("db");
     const initial = requested ? normalizeDatabaseUrl(requested) : store.activeUrl;
@@ -1074,10 +1503,11 @@ function boot() {
         if (requested && !store.databases.some((entry) => entry.url === initial)) {
             addDatabase(initial, "");
         }
+        updateDbHeader(initial);
         connect(initial, { silent: true });
     } else {
-        setConnectionState("idle", "not connected");
-        switchTab("databases");
+        updateDbHeader("");
+        openModal("dbManagerModal");
     }
 }
 

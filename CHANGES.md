@@ -47,3 +47,21 @@ The panel now only reads a database you point it at, with bounded reads.
 arrays · RTX `Sim1` / `Sim2` · `installTime` / `joined` · `lastSeen` / `TimeandDate` /
 `timestamp` / `ping.ts`. Dead SIM placeholders are filtered; `dualSim` is inferred from two or
 more live SIMs.
+
+## v10.1 — original UI restored, lookup toggle, feed auto-sync
+
+* **Interface restored** to the original MATRIX COMMAND layout: header scope label, load bar
+  with schema badge, stat strip (`On · Dev · Sms · Sim · Shown`), collapsible device sidebar
+  with ALL/ON/OFF pills, two-pane main area, bottom nav, database manager sheet, and the
+  global search overlay. Tailwind CDN + Material Icons as before.
+* **Message feed fixed.** Messages are now aggregated for the whole database during connect —
+  a per-device map node (`user_sms/<did>/<msgId>`), a global `messages` / `sms` node, or
+  message nodes nested in device records — so the SMS Feed tab is populated immediately with
+  no device preselection. Adds a device selector, direction filter, per-row copy and a
+  "jump to device" action.
+* **Lookup toggle** in the header; when enabled, every device card shows a `Lookup` button
+  that checks that device's recorded number and renders the result in a sheet.
+* Lookup endpoint/token/initData stay in the Lookup tab and in local storage — no credential
+  is committed.
+* Device cards, sidebar rows, JSON export and the detail sheet now share one normaliser, and
+  `deviceIdFromMessage()` is unit-tested alongside the rest (29 assertions).
