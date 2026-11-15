@@ -1,6 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "cleanUrls": true,
+  "functions": {
+    "api/lookup.js": {
+      "maxDuration": 20
+    }
+  },
   "trailingSlash": false,
   "headers": [
     {

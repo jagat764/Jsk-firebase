@@ -15,7 +15,8 @@ app.js            UI wiring, loading, rendering
 lib/schema.js     the ten layout profiles, SimINFO sidecar, type detector, override
 lib/detect.js     pure helpers: URLs, normalisation, search, formatting
 lib/db.js         Realtime Database REST client
-lib/lookup.js     check-mobile client
+lib/lookup.js     check-mobile client (+ /api/lookup proxy fallback)
+api/lookup.js     same-origin proxy for the lookup endpoint
 test/             44 unit tests (node --test)
 ```
 
@@ -110,8 +111,12 @@ original build — only the write path is gone.
 **Node candidates.** Each type has an ordered alias list (`lib/schema.js`), followed by the
 universal fallbacks (`All_User/Info`, `All_Users/Info`, `All_User/DeviceInfo`,
 `All_Users/DeviceInfo`, `user_data`, `clients`, `devices` for devices; `All_User/Sms`,
-`All_Users/Sms`, `Sms`, `messages`, `user_sms` for messages). The first candidate that
-actually holds records wins.
+`All_Users/Sms`, `Sms`, `messages`, `user_sms` for messages), then any remaining root key.
+
+Every candidate is **inspected and ranked** — records carrying device fields first, field
+score second — instead of taking the first node that answers. That is what keeps a thin or
+legacy `clients` node from hiding the real inventory in `user_data`. The report (which nodes
+were tried and why each one lost) is printed in the Data tab and in the banner.
 
 **Ping decoys.** `clients` / `devices` sometimes contain only `ping: { ts, wake }` records.
 Those are skipped and the loader falls through to the real node — the skipped candidates are
@@ -126,9 +131,20 @@ which node supplied the devices, whether a root `smsQueue` promoted Type 6 → 9
 first record carries `Sim1`/`device_name`/`charge` (Type 3) or Aadhaar/PanCard/Dob (Type 8),
 and whether a message carries `sendSms` (Type 2).
 
-**Manual override.** The Data tab has a layout dropdown (Auto + Types 1–10). The choice is
-stored under the original `fbSchemaOverride` key, so an override carried over from the old
-build still applies, and the badge turns amber with `· manual`.
+**Manual override.** The Data tab has a layout dropdown (Auto + Types 1–10) plus **Reset**. The
+choice is stored under the original `fbSchemaOverride` key, so an override carried over from
+the old build still applies, and the badge turns amber with `· manual`.
+
+An override is *validated*: if the forced node holds no devices, the auto result is used and
+the banner says so. If a legacy override from the previous build points at a different node
+than auto-detect would choose, it is cleared automatically with a toast, because that is
+almost always a stale pin rather than a deliberate choice.
+
+**Message discovery** runs in three passes: the schema candidate nodes (global list or
+per-device map), message nodes **nested inside device records** (`sms`, `messages`, `chats`,
+`inbox`, `sent`, `logs`, …), and finally a **generic scan of the remaining root keys** for
+databases whose log node has a name the alias tables do not know. Reads stay bounded:
+60 device nodes × 150 messages.
 
 Field aliases handled: `d_name` / `DeviceName` / `device_name` / `model` / `Device_info` for the
 model, `battery` / `batt` / `charge` for the level, `status` / `online` for the state, and so
@@ -156,17 +172,21 @@ Pages only ever issue `GET`s against a database you point them at.
 npm test        # node --test
 ```
 
-44 assertions: URL parsing, candidate ordering per layout, ping-decoy rejection, SimINFO
+56 assertions: URL parsing, candidate ordering per layout, ping-decoy rejection, SimINFO
 sidecar mapping and merge, type detection evidence (Types 1/3/6/7/8/9/10), field/SIM
 normalisation (inline SIMs, sidecar maps, RTX `Sim1`, lowercase `sim1`), dead-value filtering,
 timestamps (seconds, ms, ISO, `DD/MM/YYYY`), message direction, search matching, relative
-time, and the lookup client's request shape and error handling (stubbed `fetch`).
+time, the lookup client's request shape, its proxy fallback, and the proxy handler itself
+(method/host/mobile/token validation, forwarding, upstream errors).
 
 ## Browser notes
 
-* The lookup call is a cross-origin `POST`. If the endpoint does not send CORS headers the
-  browser blocks it — the panel reports that case explicitly. Serve the panel from the same
-  origin as the endpoint, or call the endpoint from your own server.
+* The lookup call is a cross-origin `POST`. When the host sends no CORS headers the browser
+  blocks it, so the client automatically retries through the bundled **`/api/lookup`** Vercel
+  function (`api/lookup.js`), which forwards the request server-side. The proxy only accepts
+  POST, only hosts on its allow-list (`pricetrackerpro.fojadomain.fun` by default, extend with
+  `LOOKUP_ALLOWED_HOSTS="host1,host2"`), never stores the token, and caps the body at 8 KB.
+  Add `?direct=1` to the page URL to skip the proxy.
 * Database secrets live in `localStorage`; use a dedicated browser profile on shared machines.
 * `?auth=` URLs end up in browser history — prefer rules-based read access where possible.
 * Tailwind and the Material Icons font load from Google's CDN, so the first paint needs
