@@ -3,71 +3,71 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#020617">
-    <title>Matrix Command — Firebase Manager Pro</title>
-    <!-- Tailwind CSS CDN (same as the original build) -->
+    <title>Enterprise Matrix Mobile Hub</title>
+    <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Google Material Icons -->
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2306b6d4'/%3E%3Ctext x='16' y='21' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%2302151d'%3EMC%3C/text%3E%3C/svg%3E">
     <link rel="stylesheet" href="style.css">
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col selection:bg-cyan-500/30 overflow-y-auto custom-scrollbar">
 
-    <!-- ============================ HEADER ============================ -->
+    <!-- Header Interface Area -->
     <header class="bg-slate-900/90 backdrop-blur-md border-b border-slate-800 px-4 py-3 flex items-center justify-between shadow-md z-40 sticky top-0">
         <div class="flex items-center space-x-2.5">
-            <button id="menuDrawerToggleBtn" class="p-2 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-center text-cyan-400 active:scale-95 transition-all" title="Open device list">
+            <button id="menuDrawerToggleBtn" class="p-2 bg-slate-950 rounded-xl border border-slate-800 flex items-center justify-center text-cyan-400 active:scale-95 transition-all">
                 <span class="material-icons text-lg">tune</span>
             </button>
-            <div class="leading-tight">
+            <div>
                 <h1 class="text-xs font-black tracking-widest text-slate-100">MATRIX<span class="text-cyan-400">COMMAND</span></h1>
                 <p id="currentSelectionLabel" class="text-[9px] text-slate-400 uppercase tracking-wider font-mono font-bold">Scope: Global View</p>
             </div>
         </div>
-
+        
         <div class="flex items-center space-x-2">
-            <button id="lookupToggleBtn" class="lookup-toggle" aria-pressed="false" title="Show a lookup button on every device card">
-                <span class="material-icons text-sm">travel_explore</span>
-                <span class="lookup-toggle-label">Lookup</span>
-                <span class="lookup-toggle-track"><span class="lookup-toggle-thumb"></span></span>
-            </button>
             <button id="globalSearchBtn" class="p-2 bg-slate-950 hover:bg-slate-900 border border-slate-800 text-slate-300 rounded-xl active:scale-95 transition-all flex items-center" title="Search all devices and messages">
                 <span class="material-icons text-sm">search</span>
             </button>
-            <button id="openDbManagerBtn" class="flex items-center gap-1.5 bg-slate-950 hover:bg-slate-900 border border-slate-800 rounded-xl px-2 py-1.5 active:scale-95 transition-all max-w-[150px]" title="Manage databases">
-                <span id="activeDbDot" class="w-1.5 h-1.5 rounded-full bg-slate-600 flex-shrink-0"></span>
+            <button id="lookupToggleBtn" class="p-2 bg-slate-950 hover:bg-slate-900 border border-slate-800 text-slate-300 rounded-xl active:scale-95 transition-all flex items-center" title="Mobile number lookup">
+                <span class="material-icons text-sm">person_search</span>
+            </button>
+            <button id="openDbManagerBtn" class="flex items-center gap-1.5 bg-slate-950 hover:bg-slate-900 border border-slate-800 rounded-xl px-2 py-1.5 active:scale-95 transition-all max-w-[150px]">
+                <span id="activeDbDot" class="w-1.5 h-1.5 rounded-full bg-emerald-400 flex-shrink-0"></span>
                 <span class="min-w-0 text-left">
-                    <span id="activeDbName" class="block text-[10px] font-mono font-bold text-slate-200 truncate leading-tight">not connected</span>
+                    <span id="activeDbName" class="block text-[10px] font-mono font-bold text-slate-200 truncate leading-tight">penal6</span>
                     <span id="activeDbHost" class="block text-[8px] font-mono text-slate-500 truncate leading-tight">firebaseio.com</span>
                 </span>
                 <span class="material-icons text-xs text-cyan-500 flex-shrink-0">expand_more</span>
             </button>
-            <button id="exportDataBtn" class="p-2 bg-slate-950 hover:bg-slate-900 border border-slate-800 text-slate-300 rounded-xl active:scale-95 transition-all flex items-center" title="Export loaded data as JSON">
+            <div class="hidden sm:flex items-center gap-1 bg-slate-950 border border-slate-800 rounded-xl px-2 py-1">
+                <span class="material-icons text-xs text-cyan-500">account_tree</span>
+                <select id="baseSelector" class="bg-transparent text-[10px] font-mono text-slate-300 outline-none max-w-[110px]"></select>
+            </div>
+            <button id="exportDataBtn" class="p-2 bg-slate-950 hover:bg-slate-900 border border-slate-800 text-slate-300 rounded-xl active:scale-95 transition-all flex items-center">
                 <span class="material-icons text-sm">download</span>
             </button>
-            <div id="connectionStatus" class="status-pill">
-                <span class="w-1 h-1 rounded-full bg-slate-400"></span>
-                <span id="connectionStatusText">IDLE</span>
+            <div id="connectionStatus" class="status-pill status-connecting">
+                <span class="w-1 h-1 rounded-full bg-amber-400 animate-ping"></span>
+                <span>LIVE</span>
             </div>
         </div>
     </header>
 
-    <!-- ========================== LOAD STATUS ========================= -->
+    <!-- Sequential Load Progress -->
     <div class="bg-slate-950 border-b border-slate-900 px-3 py-1.5">
         <div class="flex items-center justify-between gap-2">
             <div class="flex items-center gap-1.5 min-w-0">
                 <span class="material-icons text-[11px] text-cyan-500">sync</span>
                 <span id="loadStatusText" class="text-[9px] font-mono text-slate-500 truncate">Preparing…</span>
             </div>
-            <span id="schemaBadge" class="text-[8px] font-mono font-bold text-slate-500 bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded flex-shrink-0">no schema</span>
+            <span id="schemaBadge" class="text-[8px] font-mono font-bold text-slate-500 bg-slate-900 border border-slate-800 px-1.5 py-0.5 rounded flex-shrink-0">Type 1</span>
         </div>
         <div id="loadProgressWrap" class="h-0.5 w-full bg-slate-900 rounded-full overflow-hidden mt-1">
             <div id="loadProgressBar" class="h-full bg-cyan-500 transition-all duration-300" style="width:0%"></div>
         </div>
     </div>
 
-    <!-- ============================ STAT STRIP ======================== -->
+    <!-- Top Summary Ribbon -->
     <section class="flex overflow-x-auto whitespace-nowrap bg-slate-950 border-b border-slate-900 p-2 gap-2 scrollbar-none shadow-inner sticky top-[53px] z-30">
         <div class="bg-slate-900/40 border border-slate-800/80 px-3 py-1.5 rounded-xl flex items-center space-x-2 min-w-[110px]">
             <span class="material-icons text-xs text-emerald-400">sensors</span>
@@ -78,21 +78,19 @@
             <div class="text-[11px] font-mono"><span id="totalClientsCount" class="font-bold text-white">0</span> <span class="text-slate-500">Dev</span></div>
         </div>
         <div class="bg-slate-900/40 border border-slate-800/80 px-3 py-1.5 rounded-xl flex items-center space-x-2 min-w-[110px]">
+            <span class="material-icons text-xs text-purple-400">webhook</span>
+            <div class="text-[11px] font-mono"><span id="botUsersCount" class="font-bold text-white">0</span> <span class="text-slate-500">Bot</span></div>
+        </div>
+        <div class="bg-slate-900/40 border border-slate-800/80 px-3 py-1.5 rounded-xl flex items-center space-x-2 min-w-[110px]">
             <span class="material-icons text-xs text-amber-400">storage</span>
             <div class="text-[11px] font-mono"><span id="totalSMSCount" class="font-bold text-white">0</span> <span class="text-slate-500">Sms</span></div>
         </div>
-        <div class="bg-slate-900/40 border border-slate-800/80 px-3 py-1.5 rounded-xl flex items-center space-x-2 min-w-[110px]">
-            <span class="material-icons text-xs text-purple-400">sim_card</span>
-            <div class="text-[11px] font-mono"><span id="totalSimCount" class="font-bold text-white">0</span> <span class="text-slate-500">Sim</span></div>
-        </div>
-        <div class="bg-slate-900/40 border border-slate-800/80 px-3 py-1.5 rounded-xl flex items-center space-x-2 min-w-[110px]">
-            <span class="material-icons text-xs text-slate-400">filter_alt</span>
-            <div class="text-[11px] font-mono"><span id="visibleClientsCount" class="font-bold text-white">0</span> <span class="text-slate-500">Shown</span></div>
-        </div>
     </section>
 
+    <!-- Content Workspace -->
     <div class="flex-1 flex relative">
-        <!-- ========================= DEVICE SIDEBAR ==================== -->
+        
+        <!-- Sliding Drawer Panel Menu Component -->
         <div id="drawerBackdropOverlay" class="hidden fixed inset-0 bg-black/60 z-40 backdrop-blur-xs transition-opacity duration-300"></div>
         <aside id="deviceSidebarSection" class="fixed top-0 left-0 h-full w-72 bg-slate-950 border-r border-slate-900 flex flex-col transform -translate-x-full md:translate-x-0 transition-transform duration-300 ease-in-out z-50 shadow-2xl md:shadow-none md:sticky md:top-[94px] md:h-[calc(100vh-94px)]">
             <div class="p-4 bg-slate-900/60 border-b border-slate-900 flex flex-col gap-3">
@@ -106,153 +104,119 @@
                     <input type="text" id="deviceSearchInput" placeholder="Find hardware target..." class="input-element pl-8">
                     <span class="material-icons absolute left-2.5 top-2.5 text-slate-600 text-xs">search</span>
                 </div>
+                <!-- Custom Toggles -->
                 <div class="grid grid-cols-3 p-0.5 bg-slate-950 rounded-xl border border-slate-900 text-center">
                     <button id="statusFilterBtn-all" class="subtab-pill subtab-pill-active">ALL</button>
                     <button id="statusFilterBtn-online" class="subtab-pill subtab-pill-inactive">ON</button>
                     <button id="statusFilterBtn-offline" class="subtab-pill subtab-pill-inactive">OFF</button>
                 </div>
             </div>
+            <!-- Dynamic Selection Lists -->
             <div id="deviceTabsListContainer" class="flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar">
                 <div class="text-xs text-slate-600 text-center py-6 font-mono">Loading data entries...</div>
             </div>
         </aside>
 
-        <!-- ============================ MAIN PANEL ==================== -->
-        <div class="flex-1 flex flex-col bg-slate-900/10 min-w-0">
+        <!-- Right Side Primary Live Work Space Monitor View -->
+        <div class="flex-1 flex flex-col bg-slate-900/10">
+            <!-- Global Search Entry Buffer Bar -->
             <div class="p-2.5 bg-slate-900/20 border-b border-slate-900/60 flex items-center justify-between gap-3 sticky top-[94px] bg-slate-950 z-20">
                 <div class="relative flex-1">
                     <input type="text" id="panelSearchInput" placeholder="Query content parameters..." class="input-element pl-8 font-mono text-xs">
                     <span class="material-icons absolute left-2.5 top-2 text-slate-600 text-sm">manage_search</span>
                 </div>
-                <button id="reloadDataBtn" class="btn-secondary flex items-center gap-1">
-                    <span class="material-icons text-xs">refresh</span>
-                    <span class="hidden sm:inline">Reload</span>
-                </button>
             </div>
 
+            <!-- Main Log Dashboard Feed -->
             <main class="flex-1 p-3 space-y-4 pb-24">
-                <div id="layoutNotice" class="hidden text-[10px] font-mono leading-relaxed rounded-xl border px-3 py-2"></div>
-
-                <!-- ---------------- Tab: device grid ---------------- -->
+                <!-- Tab 1: Clients Panel View -->
                 <div id="tabContent-clients" class="space-y-2.5">
                     <h3 class="section-title px-1">Hardware Profile Inventories</h3>
                     <div id="clientsContainer" class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        <div class="status-placeholder">Connect a database to sync hardware profiles.</div>
+                        <div class="status-placeholder">Awaiting live client synchronization profiles...</div>
                     </div>
                 </div>
 
-                <!-- ---------------- Tab: messages ---------------- -->
+                <!-- Tab 2: Isolated SMS Logs Tracking Sheets -->
                 <div id="tabContent-messages" class="hidden space-y-2.5">
-                    <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded-xl border border-slate-900 gap-2">
+                    <div class="flex items-center justify-between p-2 bg-slate-950/60 rounded-xl border border-slate-900">
                         <div class="flex items-center space-x-1.5 overflow-hidden">
                             <h3 class="section-title truncate">Logs Feed</h3>
                             <span id="activeDeviceFilterLabel" class="text-[9px] font-mono text-cyan-400 bg-cyan-950/40 border border-cyan-800/40 px-1.5 py-0.5 rounded">All Devices</span>
                         </div>
                         <div class="flex items-center space-x-1.5">
+                            <button id="smsAutoRefreshBtn" class="hidden sm:flex items-center gap-1 bg-slate-950 border border-slate-800 rounded-xl px-2 py-1.5 font-mono text-[9px] transition" title="Auto-refresh messages">
+                                <span id="smsAutoRefreshDot" class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                                <span>AUTO</span>
+                            </button>
                             <span id="smsLastSyncLabel" class="hidden md:inline text-[8px] font-mono text-slate-600">never synced</span>
-                            <button id="refreshMessagesBtn" class="btn-secondary flex items-center space-x-1 py-1 px-2.5 text-[10px]">
+                            <button id="triggerSmsFetchBtn" class="btn-secondary hidden flex items-center space-x-1 py-1 px-2.5 text-[10px]">
                                 <span class="material-icons text-xs">sync_alt</span>
-                                <span>Sync</span>
+                                <span>Fetch Latest</span>
+                            </button>
+                            <button id="triggerSmsSendBtn" class="hidden bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-400 font-bold text-[10px] font-mono rounded-xl px-3 py-2 transition flex items-center space-x-1.5">
+                                <span class="material-icons text-sm">send</span>
+                                <span>SEND SMS</span>
                             </button>
                         </div>
-                    </div>
-                    <div class="flex items-center gap-2">
-                        <select id="messageDeviceFilter" class="input-element flex-1">
-                            <option value="">All devices</option>
-                        </select>
-                        <select id="messageDirectionFilter" class="input-element w-28">
-                            <option value="all">In + Out</option>
-                            <option value="in">Inbound</option>
-                            <option value="out">Outbound</option>
-                        </select>
                     </div>
                     <div id="smsMessagesContainer" class="space-y-2">
-                        <div class="status-placeholder">Syncing message logs…</div>
+                        <div class="status-placeholder">Select a client profile card to inspect inbound transactions logs.</div>
                     </div>
                 </div>
 
-                <!-- ---------------- Tab: lookup ---------------- -->
-                <div id="tabContent-lookup" class="hidden space-y-2.5">
-                    <h3 class="section-title px-1">Mobile Lookup</h3>
-                    <form id="lookupForm" class="bg-slate-900/60 border border-slate-900 rounded-xl p-3 space-y-2.5">
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                            <label class="block">
-                                <span class="text-[9px] font-mono font-bold text-slate-500 uppercase tracking-wider">Mobile number</span>
-                                <input id="lookupMobile" type="tel" inputmode="numeric" placeholder="9876543210" class="input-element mt-1" required>
-                            </label>
-                            <label class="block">
-                                <span class="text-[9px] font-mono font-bold text-slate-500 uppercase tracking-wider">initData (optional)</span>
-                                <input id="lookupInitData" type="text" spellcheck="false" placeholder="leave empty if unused" class="input-element mt-1">
-                            </label>
-                        </div>
-                        <label class="block">
-                            <span class="text-[9px] font-mono font-bold text-slate-500 uppercase tracking-wider">Endpoint</span>
-                            <input id="lookupEndpoint" type="url" spellcheck="false" placeholder="https://example.com/api/sw/check-mobile" class="input-element mt-1">
-                        </label>
-                        <label class="block">
-                            <span class="text-[9px] font-mono font-bold text-slate-500 uppercase tracking-wider">Token (stored in this browser only)</span>
-                            <input id="lookupToken" type="password" spellcheck="false" placeholder="x-token value" class="input-element mt-1">
-                        </label>
-                        <div class="flex flex-wrap items-center gap-2 pt-1">
-                            <button id="lookupSubmit" type="submit" class="bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 font-bold text-[10px] font-mono rounded-xl px-3 py-2 transition flex items-center gap-1.5">
-                                <span class="material-icons text-sm">travel_explore</span><span>Check number</span>
-                            </button>
-                            <button id="lookupSaveBtn" type="button" class="btn-secondary text-[10px] py-2 px-3">Save settings</button>
-                        </div>
-                        <p class="text-[9px] font-mono text-slate-600 leading-relaxed">
-                            POST with <span class="text-slate-400">x-token</span> and
-                            <span class="text-slate-400">{ mobile, token, initData }</span>. Enable the header
-                            <span class="text-cyan-400">Lookup</span> toggle to run this straight from a device card.
-                        </p>
-                    </form>
-                    <div id="lookupStatus" class="hidden text-[10px] font-mono leading-relaxed rounded-xl border px-3 py-2"></div>
-                    <div id="lookupResult" class="hidden bg-slate-900/60 border border-slate-900 rounded-xl p-3 space-y-1"></div>
-                </div>
-
-                <!-- ---------------- Tab: data / databases ---------------- -->
-                <div id="tabContent-data" class="hidden space-y-2.5">
-                    <h3 class="section-title px-1">Database Connections</h3>
-                    <div class="bg-slate-900/60 border border-slate-900 rounded-xl p-3 space-y-2">
-                        <div class="text-[10px] font-mono font-bold text-cyan-400 uppercase tracking-wider">Add a database</div>
-                        <input id="dbUrlInput" type="text" placeholder="https://my-project-default-rtdb.firebaseio.com" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-[11px] font-mono text-slate-200 placeholder-slate-600 outline-none focus:border-cyan-500/50 transition">
-                        <input id="dbLabelInput" type="text" placeholder="Label (optional)" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-[11px] font-mono text-slate-200 placeholder-slate-600 outline-none focus:border-cyan-500/50 transition">
-                        <button id="dbAddBtn2" class="w-full bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 font-bold text-[10px] font-mono rounded-lg px-3 py-2.5 transition flex items-center justify-center gap-1.5">
-                            <span class="material-icons text-sm">add_link</span><span>Add &amp; connect</span>
-                        </button>
-                        <div id="dbAddFeedback" class="text-[9px] font-mono text-slate-500 hidden"></div>
-                    </div>
-
-                    <h3 class="section-title px-1 pt-1">Saved Databases</h3>
-                    <div id="dbListContainer" class="space-y-2"></div>
-
-                    <h3 class="section-title px-1 pt-1">Layout Override</h3>
-                    <div class="bg-slate-900/60 border border-slate-900 rounded-xl p-3 space-y-2">
-                        <div class="text-[9px] font-mono text-slate-500 leading-relaxed">
-                            Auto-detect picks the layout from the node paths and record fields. Force one when a
-                            database uses an unusual shape — the choice is remembered in this browser.
-                        </div>
-                        <div class="flex items-center gap-2">
-                            <select id="schemaOverrideSelect" class="input-element flex-1">
-                                <option value="auto">Auto-detect</option>
-                            </select>
-                            <button id="resetOverrideBtn" type="button" class="btn-secondary text-[10px] py-2 px-2.5" title="Clear the stored override and re-detect">
-                                Reset
-                            </button>
-                        </div>
-                        <div id="schemaEvidence" class="text-[9px] font-mono text-slate-600 leading-relaxed"></div>
-                    </div>
-
-                    <h3 class="section-title px-1 pt-1">Detected Layout</h3>
+                <!-- Tab 3: Bot Users Settings Mapping Panel -->
+                <div id="tabContent-bots" class="hidden space-y-2.5">
+                    <h3 class="section-title px-1">Relay Matrix Gateways</h3>
                     <div class="table-frame">
-                        <pre id="layoutDetails" class="p-3 text-[10px] font-mono text-slate-400 whitespace-pre-wrap break-words">Connect a database to inspect its structure.</pre>
+                        <table class="w-full text-left border-collapse text-xs font-mono">
+                            <thead>
+                                <tr class="table-header">
+                                    <th class="p-3">Gateway Token ID</th>
+                                    <th class="p-3">Channel Endpoint</th>
+                                    <th class="p-3">Label Descriptor</th>
+                                    <th class="p-3">Forward Param</th>
+                                </tr>
+                            </thead>
+                            <tbody id="botsTableBody" class="divide-y divide-slate-900 text-slate-300">
+                                <tr><td colspan="4" class="p-4 text-center text-slate-600">Awaiting system parameters synchronization arrays...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Tab 4: Links Proxy Status Matrix Layout -->
+                <div id="tabContent-links" class="hidden space-y-2.5">
+                    <h3 class="section-title px-1">Proxy Access Links</h3>
+                    <div class="table-frame">
+                        <table class="w-full text-left border-collapse text-xs font-mono">
+                            <thead>
+                                <tr class="table-header">
+                                    <th class="p-3">Sub-Path Token</th>
+                                    <th class="p-3">Hardware Target ID Reference</th>
+                                    <th class="p-3 text-right">Status Flag</th>
+                                </tr>
+                            </thead>
+                            <tbody id="linksTableBody" class="divide-y divide-slate-900 text-slate-300">
+                                <tr><td colspan="3" class="p-4 text-center text-slate-600">No active parameters logged inside data tree paths.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Tab 5: Scheme Extraction (formats A–E) -->
+                <div id="tabContent-schemes" class="hidden space-y-2.5">
+                    <h3 class="section-title px-1">Scheme Extraction Engine</h3>
+                    <div id="schemesContainer" class="space-y-2.5">
+                        <div class="status-placeholder">Loading scheme engine...</div>
                     </div>
                 </div>
             </main>
         </div>
     </div>
 
-    <!-- ========================== BOTTOM NAV ========================== -->
-    <nav class="fixed bottom-0 inset-x-0 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 z-[60] grid grid-cols-4 shadow-[0_-4px_15px_rgba(0,0,0,0.4)]">
+    <!-- Android Bottom Navigation Bar -->
+    <nav class="fixed bottom-0 inset-x-0 bg-slate-900/95 backdrop-blur-md border-t border-slate-800 z-[60] grid grid-cols-5 shadow-[0_-4px_15px_rgba(0,0,0,0.4)]">
         <button id="bottomTabBtn-clients" class="bottom-nav-item bottom-nav-active">
             <span class="material-icons">dashboard</span>
             <span>Grid</span>
@@ -261,17 +225,21 @@
             <span class="material-icons">forum</span>
             <span>SMS Feed</span>
         </button>
-        <button id="bottomTabBtn-lookup" class="bottom-nav-item bottom-nav-inactive">
-            <span class="material-icons">travel_explore</span>
-            <span>Lookup</span>
+        <button id="bottomTabBtn-bots" class="bottom-nav-item bottom-nav-inactive">
+            <span class="material-icons">memory</span>
+            <span>Relays</span>
         </button>
-        <button id="bottomTabBtn-data" class="bottom-nav-item bottom-nav-inactive">
-            <span class="material-icons">storage</span>
-            <span>Data</span>
+        <button id="bottomTabBtn-links" class="bottom-nav-item bottom-nav-inactive">
+            <span class="material-icons">dns</span>
+            <span>Proxies</span>
+        </button>
+        <button id="bottomTabBtn-schemes" class="bottom-nav-item bottom-nav-inactive">
+            <span class="material-icons">radar</span>
+            <span>Schemes</span>
         </button>
     </nav>
 
-    <!-- ======================= DATABASE MANAGER ======================= -->
+    <!-- Database Manager Modal -->
     <div id="dbManagerModal" class="hidden fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4">
         <div id="dbManagerBackdrop" class="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
         <div class="relative w-full sm:max-w-lg max-h-[88vh] bg-slate-900 border border-slate-800 rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden">
@@ -287,71 +255,35 @@
                     <span class="material-icons text-sm">close</span>
                 </button>
             </div>
+
             <div class="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-3">
+                <!-- Add form -->
                 <div class="bg-slate-950/60 border border-slate-800 rounded-xl p-3 space-y-2">
                     <div class="text-[10px] font-mono font-bold text-cyan-400 uppercase tracking-wider">Add a database</div>
-                    <input id="dbUrlInput2" type="text" placeholder="https://my-project-default-rtdb.firebaseio.com" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-[11px] font-mono text-slate-200 placeholder-slate-600 outline-none focus:border-cyan-500/50 transition">
-                    <input id="dbLabelInput2" type="text" placeholder="Label (optional)" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-[11px] font-mono text-slate-200 placeholder-slate-600 outline-none focus:border-cyan-500/50 transition">
+                    <input id="dbUrlInput" type="text" placeholder="https://my-project-default-rtdb.firebaseio.com" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-[11px] font-mono text-slate-200 placeholder-slate-600 outline-none focus:border-cyan-500/50 transition">
+                    <input id="dbLabelInput" type="text" placeholder="Label (optional)" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-[11px] font-mono text-slate-200 placeholder-slate-600 outline-none focus:border-cyan-500/50 transition">
                     <button id="dbAddBtn" class="w-full bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 font-bold text-[10px] font-mono rounded-lg px-3 py-2.5 transition flex items-center justify-center gap-1.5">
                         <span class="material-icons text-sm">add_link</span><span>Add &amp; connect</span>
                     </button>
-                    <div id="dbAddFeedback2" class="text-[9px] font-mono text-slate-500 hidden"></div>
+                    <div id="dbAddFeedback" class="text-[9px] font-mono text-slate-500 hidden"></div>
                     <p class="text-[9px] font-mono text-slate-600 leading-relaxed">
-                        Accepts a plain RTDB URL or one with <span class="text-slate-400">?auth=</span>. Saved in this browser only.
+                        Accepts a plain RTDB URL, a URL with <span class="text-slate-400">?auth=</span>, or a panel link. Saved in this browser only.
                     </p>
                 </div>
+
+                <!-- Saved list -->
                 <div class="space-y-2">
                     <div class="flex items-center justify-between">
                         <div class="text-[10px] font-mono font-bold text-cyan-400 uppercase tracking-wider">Saved databases</div>
-                        <span class="text-[9px] font-mono text-slate-600">tap to use</span>
+                        <span class="text-[9px] font-mono text-slate-600">tap to test / use</span>
                     </div>
-                    <div id="dbListContainer2" class="space-y-2"></div>
+                    <div id="dbListContainer" class="space-y-2"></div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- ========================= DEVICE DETAIL ======================== -->
-    <div id="deviceModal" class="hidden fixed inset-0 z-[72] flex items-end sm:items-center justify-center p-0 sm:p-4">
-        <div id="deviceModalBackdrop" class="absolute inset-0 bg-black/75 backdrop-blur-sm"></div>
-        <div class="relative w-full sm:max-w-lg max-h-[88vh] bg-slate-900 border border-slate-800 rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden">
-            <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/95 gap-2">
-                <div class="flex items-center gap-2 min-w-0">
-                    <span class="material-icons text-cyan-400 text-lg">phone_android</span>
-                    <div class="min-w-0">
-                        <div id="deviceModalTitle" class="text-xs font-black tracking-wider text-slate-100 truncate">Device</div>
-                        <div id="deviceModalSub" class="text-[9px] font-mono text-slate-500 truncate">—</div>
-                    </div>
-                </div>
-                <button id="closeDeviceModalBtn" class="p-1.5 bg-slate-950 border border-slate-800 rounded-lg text-slate-400 hover:text-slate-200 transition">
-                    <span class="material-icons text-sm">close</span>
-                </button>
-            </div>
-            <div id="deviceModalContent" class="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-2"></div>
-        </div>
-    </div>
-
-    <!-- ======================= PER-DEVICE LOOKUP ====================== -->
-    <div id="deviceLookupModal" class="hidden fixed inset-0 z-[74] flex items-end sm:items-center justify-center p-0 sm:p-4">
-        <div id="deviceLookupBackdrop" class="absolute inset-0 bg-black/75 backdrop-blur-sm"></div>
-        <div class="relative w-full sm:max-w-md max-h-[88vh] bg-slate-900 border border-slate-800 rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden">
-            <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/95 gap-2">
-                <div class="flex items-center gap-2 min-w-0">
-                    <span class="material-icons text-cyan-400 text-lg">travel_explore</span>
-                    <div class="min-w-0">
-                        <div class="text-xs font-black tracking-wider text-slate-100">MOBILE LOOKUP</div>
-                        <div id="deviceLookupSub" class="text-[9px] font-mono text-slate-500 truncate">—</div>
-                    </div>
-                </div>
-                <button id="closeDeviceLookupBtn" class="p-1.5 bg-slate-950 border border-slate-800 rounded-lg text-slate-400 hover:text-slate-200 transition">
-                    <span class="material-icons text-sm">close</span>
-                </button>
-            </div>
-            <div id="deviceLookupContent" class="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-2"></div>
-        </div>
-    </div>
-
-    <!-- ========================= GLOBAL SEARCH ======================== -->
+    <!-- Global Search Overlay -->
     <div id="globalSearchModal" class="hidden fixed inset-0 z-[75] flex items-start justify-center p-3 sm:p-6">
         <div id="globalSearchBackdrop" class="absolute inset-0 bg-black/75 backdrop-blur-sm"></div>
         <div class="relative w-full sm:max-w-2xl max-h-[85vh] bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl flex flex-col overflow-hidden mt-8">
@@ -372,9 +304,58 @@
         </div>
     </div>
 
-    <!-- =========================== TOASTS ============================= -->
-    <div id="toastNotificationContainer" class="fixed bottom-20 right-4 left-4 md:left-auto z-[80] flex flex-col gap-1.5 max-w-sm pointer-events-none"></div>
+    <!-- Mobile Number Lookup -->
+    <div id="lookupModal" class="hidden fixed inset-0 z-[80] flex items-end sm:items-center justify-center p-0 sm:p-4">
+        <div id="lookupBackdrop" class="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
+        <div class="relative w-full sm:max-w-lg max-h-[88vh] bg-slate-900 border border-slate-800 rounded-t-2xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden">
+            <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/95">
+                <div class="flex items-center gap-2 min-w-0">
+                    <span class="material-icons text-cyan-400 text-lg">person_search</span>
+                    <div class="min-w-0">
+                        <div class="text-xs font-black tracking-wider text-slate-100">LOOKUP</div>
+                        <div id="lookupSubtitle" class="text-[9px] font-mono text-slate-500 truncate">device lookup</div>
+                    </div>
+                </div>
+                <div class="flex items-center gap-1.5">
+                    <button id="lookupSettingsBtn" class="p-1.5 bg-slate-950 border border-slate-800 rounded-lg text-slate-400 hover:text-slate-200 transition" title="Endpoint and token">
+                        <span class="material-icons text-sm">settings</span>
+                    </button>
+                    <button id="closeLookupBtn" class="p-1.5 bg-slate-950 border border-slate-800 rounded-lg text-slate-400 hover:text-slate-200 transition">
+                        <span class="material-icons text-sm">close</span>
+                    </button>
+                </div>
+            </div>
 
-    <script type="module" src="app.js"></script>
+            <div class="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-2.5">
+                <div class="bg-slate-950/60 border border-slate-800 rounded-xl p-3 space-y-2">
+                    <label class="text-[9px] font-mono font-bold text-cyan-400 uppercase tracking-wider">Mobile number</label>
+                    <input id="lookupMobileInput" type="tel" placeholder="10-digit mobile number" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-xs font-mono text-slate-200 placeholder-slate-600 outline-none focus:border-cyan-500/50 transition">
+                    <button id="lookupRunBtn" class="w-full bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/30 text-cyan-400 font-bold text-[10px] font-mono rounded-lg px-3 py-2.5 transition flex items-center justify-center gap-1.5">
+                        <span class="material-icons text-sm">search</span><span>Lookup</span>
+                    </button>
+                    <div id="lookupRunFeedback" class="text-[9px] font-mono text-slate-500 hidden"></div>
+                </div>
+
+                <div id="lookupSettingsPanel" class="hidden bg-slate-950/60 border border-slate-800 rounded-xl p-3 space-y-2">
+                    <div class="text-[10px] font-mono font-bold text-cyan-400 uppercase tracking-wider">Service</div>
+                    <input id="lookupEndpointInput" type="text" placeholder="https://host/api/sw/check-mobile" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-[11px] font-mono text-slate-200 placeholder-slate-600 outline-none focus:border-cyan-500/50 transition">
+                    <input id="lookupTokenInput" type="password" placeholder="x-token" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-[11px] font-mono text-slate-200 placeholder-slate-600 outline-none focus:border-cyan-500/50 transition">
+                    <input id="lookupInitDataInput" type="text" placeholder="initData (optional)" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-2 text-[11px] font-mono text-slate-200 placeholder-slate-600 outline-none focus:border-cyan-500/50 transition">
+                    <p class="text-[9px] font-mono text-slate-600 leading-relaxed">
+                        Endpoint and token are stored in this browser only. The request goes through
+                        <span class="text-slate-400">/api/lookup</span> when the service does not allow direct browser calls.
+                    </p>
+                </div>
+
+                <div id="lookupResult" class="space-y-2"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Debug Toasts Container -->
+    <div id="toastNotificationContainer" class="fixed bottom-20 right-4 left-4 md:left-auto z-50 flex flex-col gap-1.5 max-w-sm pointer-events-none"></div>
+
+    <script type="module" src="app_v9.js"></script>
+    <script type="module" src="lookup-ui.js"></script>
 </body>
 </html>

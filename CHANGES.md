@@ -110,3 +110,39 @@ Fixes the live-database symptoms: `Type 1 · manual` pinned to a thin `clients` 
 * **Tests** 44 → 56 (proxy fallback + proxy handler validation), jsdom smoke now covers the
   live-database shape (`clients` thin, `messages` empty, logs nested in `user_data`, stale
   override) plus Type 1/6/10 and an unknown message node name.
+
+## v11.0 — original build restored, lookup kept
+
+The v10 rewrite (own REST data layer, rebuilt markup, extra Data tab, layout banner) is gone.
+The panel is the original v9 build again, with one added feature.
+
+Restored verbatim from the uploaded v9 source:
+
+* `index.html` — original header, ribbon, drawer, five tabs (Grid / SMS Feed / Relays / Proxies /
+  Schemes), bottom nav, database manager, global search. Verified diff: **three insertions only**
+  (lookup button, lookup sheet, extra script tag).
+* `style.css` — original stylesheet byte-for-byte, lookup styles appended after it.
+* `app_v9.js` — original application logic: detection, node candidates, SimINFO sidecar, message
+  loading, base switching, database manager, search, rendering, schema override.
+* `cfg_51805.js` — original Firebase init and `?db=` handling.
+* `schemes.js` — original scheme catalogue (metadata) so the Schemes tab renders as before.
+
+Changed, on purpose:
+
+* **Read-only guard.** The 17 `set(ref(db, …))` command writes now call `__readOnly()`, which
+  throws so the existing try/catch surfaces a failure toast. No device command can be queued.
+* **Extraction engine removed** from `schemes.js`: base discovery, `scanAll`/`scanScheme`,
+  phone extraction, OTP lookup and the "bad numbers" list return empty results.
+
+Added — the lookup only:
+
+* `lookup-ui.js` — header toggle (person_search), a Lookup chip on every device card with the SIM
+  number it can read, and a lookup sheet showing the flattened response with status, timing and
+  proxy or direct path.
+* `lib/lookup.js`, `api/lookup.js` — unchanged from v10.3: same-origin proxy so the CORS-less
+  endpoint works from the deployed domain, with host allow-list, 8 KB cap and 15 s timeout.
+
+Removed: `app.js`, `lib/schema.js`, `lib/detect.js`, `lib/db.js`, `test/schema.test.mjs`,
+`test/detect.test.mjs` — superseded by the restored originals.
+
+Verification: `npm test` → 12/12; `node .smoke/lookup.mjs` → 16/16 UI checks.
