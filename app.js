@@ -67,6 +67,7 @@ function defaultStore() {
         activeUrl: "",
         lookupEnabled: false,
         schemaOverride: null,
+        schemaOverrideLegacy: false,
         lookup: { endpoint: DEFAULT_LOOKUP_ENDPOINT, token: "", initData: "" },
     };
 }
@@ -85,6 +86,10 @@ function loadStore() {
                 Number.isInteger(parsed.schemaOverride) && parsed.schemaOverride >= 1
                     ? parsed.schemaOverride
                     : readSchemaOverrideKey(),
+            schemaOverrideLegacy:
+                Number.isInteger(parsed.schemaOverride) && parsed.schemaOverride >= 1
+                    ? Boolean(parsed.schemaOverrideLegacy)
+                    : Number.isInteger(readSchemaOverrideKey()),
             lookup: { ...base.lookup, ...(parsed.lookup || {}) },
         };
     } catch {
@@ -140,6 +145,7 @@ const runtime = {
     messages: [],              // aggregated, normalised, newest first
     messageIndex: new Map(),   // deviceId -> normalised messages
     messageSourceLabel: "",
+    messagesScanned: false,
     selectedDeviceId: "",
     messageDeviceFilter: "",
     messageDirectionFilter: "all",
@@ -280,15 +286,32 @@ async function connect(url, { silent = false } = {}) {
         }
 
         setLoadStatus("Resolving layout…");
-        const clients = await resolveClients(connection);
-        const sidecarPath = clients.clientsPath ? simSidecarPath(clients.clientsPath) : null;
+        let clients = await resolveClients(connection, probe.keys);
+        if (clients.overrideConflicts && store.schemaOverrideLegacy) {
+            // Inherited from the previous build and now pointing at the wrong
+            // node — drop it and let detection decide.
+            const legacy = schemaName(store.schemaOverride);
+            store.schemaOverride = null;
+            store.schemaOverrideLegacy = false;
+            saveStore();
+            clients = await resolveClients(connection, probe.keys);
+            toast(
+                `Cleared a ${legacy} override left over from the previous build — using the auto-detected node "${clients.clientsPath}".`,
+                "info",
+                6000,
+            );
+        }
         runtime.layout = {
             rootKeys: probe.keys,
             clientsPath: clients.clientsPath,
             rawClients: clients.rawClients,
             simsNode: clients.simsNode,
-            simsPath: sidecarPath || "",
-            skipped: clients.skipped,
+            simsPath: clients.simsPath,
+            report: clients.report,
+            autoBest: clients.autoBest,
+            forcedBest: clients.forcedBest,
+            overrideConflicts: clients.overrideConflicts,
+            overrideBroken: clients.overrideBroken,
         };
         setProgress(45);
 
@@ -317,6 +340,7 @@ async function connect(url, { silent = false } = {}) {
         runtime.connected = true;
         setConnectionPill("ok", "LIVE");
         renderSchemaBadge();
+        renderLayoutNotice();
         setLoadStatus(
             `Synced · ${runtime.devices.length} devices · ${runtime.messages.length} messages`,
         );
@@ -373,11 +397,65 @@ function renderSchemaBadge() {
         ? runtime.schemaEvidence.join(" · ")
         : "no evidence yet — connect a database";
 
+    const autoNode = runtime.layout?.autoBest?.path;
+    const usedNode = runtime.layout?.clientsPath;
+    const mismatch = Boolean(manual && autoNode && usedNode && autoNode !== usedNode);
+
     el.textContent = `${schemaName(active)}${manual ? " · manual" : ""}`;
-    el.title = manual
-        ? `Manual override. Auto-detect said ${schemaName(detected)} — ${evidence}`
-        : evidence;
+    el.title = [
+        manual ? `Manual override. Auto-detect said ${schemaName(detected)}.` : "",
+        evidence,
+        mismatch ? `Auto layout reads "${autoNode}", the forced layout reads "${usedNode}".` : "",
+    ]
+        .filter(Boolean)
+        .join(" — ");
     el.classList.toggle("schema-manual", manual);
+}
+
+/** Banner in the main panel: override conflicts and empty message feeds. */
+function renderLayoutNotice() {
+    const bits = [];
+
+    if (runtime.layout?.overrideConflicts) {
+        bits.push(
+            `<div>Layout override <b>${esc(schemaName(store.schemaOverride))}</b> is active and reads <code>${esc(
+                runtime.layout.clientsPath,
+            )}</code>, but <code>${esc(runtime.layout.autoBest.path)}</code> has more device records (${
+                runtime.layout.autoBest.count
+            }). <button type="button" class="sms-link" data-use-auto="1">Use auto-detected layout</button></div>`,
+        );
+    } else if (runtime.layout?.overrideBroken) {
+        bits.push(
+            `<div>The forced layout did not find a device node, so <code>${esc(
+                runtime.layout.clientsPath || "auto",
+            )}</code> is being used instead. <button type="button" class="sms-link" data-use-auto="1">Clear override</button></div>`,
+        );
+    }
+
+    if (runtime.connected && !runtime.messages.length) {
+        bits.push(
+            `<div>No messages were found. Probed: ${esc(
+                (runtime.layout?.rootKeys || []).join(", ") || "—",
+            )}. If the log lives under a node this build does not know, force the matching layout in the Data tab.</div>`,
+        );
+    }
+
+    const skipped = runtime.layout?.report?.filter((entry) => entry.status !== "ok") || [];
+    if (skipped.length) {
+        bits.push(
+            `<div>Checked ${runtime.layout.report.length} candidate nodes: ${esc(
+                skipped.map((entry) => `${entry.path} (${entry.status})`).join(", "),
+            )}.</div>`,
+        );
+    }
+
+    if (!bits.length) {
+        setNotice("");
+        return;
+    }
+    const node = $("layoutNotice");
+    node.className = "notice-info text-[10px] font-mono leading-relaxed rounded-xl border px-3 py-2 space-y-1";
+    node.innerHTML = bits.join("");
 }
 
 /** Read the node list behind a path, tolerating missing nodes. */
@@ -394,49 +472,109 @@ async function shallowKeys(connection, path) {
  * list for the active schema, skip ping-only decoys, keep the SimINFO sidecar
  * when the layout stores SIM data outside the device record.
  */
-async function resolveClients(connection) {
-    const candidates = nodeCandidates(store.schemaOverride, "clients");
-    const skipped = [];
-    let clientsPath = "";
-    let rawClients = null;
+const MESSAGE_NESTED_KEY = /^(sms|smss|smses|messages|message|message_list|messages_list|chats|chat|inbox|sent|outbox|logs|user_sms|sms_list|smslist|msg|msgs|texts)$/i;
+const SCAN_SKIP_ROOT = new Set([
+    "_panelmeta", "admin", "admins", "config", "settings", "guard", "licenses",
+    "licence", "license", "links", "proxies", "proxy", "bot_users", "bots",
+    "sms_forward", "smsforward", "stats", "meta", "notifications",
+]);
+
+/**
+ * Score one candidate device node: how many of its records actually look like
+ * devices, and how strongly. Decoys (record = { ping }) score zero.
+ */
+async function inspectClientCandidate(connection, path) {
+    try {
+        const { data } = await readNode(connection, path);
+        const entries = objectEntries(data);
+        if (!entries.length) return { path, status: "empty" };
+
+        const sample = entries.slice(0, 6).map(([, value]) => value);
+        if (isPingOnly(sample)) {
+            return { path, status: "ping-only decoy", count: entries.length };
+        }
+        const validRecords = entries.filter(
+            ([, value]) => deviceFieldScore(value) > 0 && !isPingOnly([value]),
+        ).length;
+        if (!validRecords) {
+            return { path, status: "no device fields", count: entries.length };
+        }
+        const score = sample.reduce((sum, value) => sum + deviceFieldScore(value), 0);
+        return { path, status: "ok", count: validRecords, score, data, entries };
+    } catch (error) {
+        return { path, status: `error: ${error?.message || "unreadable"}` };
+    }
+}
+
+/**
+ * Resolve the device node.
+ *
+ * Every candidate is inspected and ranked (records with device fields first,
+ * field score second) instead of taking the first path that answers — that is
+ * what stops a thin/decoy node such as `clients` from hiding `user_data`.
+ * A manual override wins, but only when the forced node actually holds
+ * devices; otherwise the auto result is used and the conflict is reported.
+ */
+async function resolveClients(connection, rootKeys = []) {
+    const order = [];
+    const push = (path) => {
+        if (path && !order.includes(path)) order.push(path);
+    };
+
+    const forcedList = Number.isInteger(store.schemaOverride)
+        ? nodeCandidates(store.schemaOverride, "clients")
+        : [];
+    forcedList.forEach(push);
+    nodeCandidates(null, "clients").forEach(push);
+    for (const key of rootKeys) {
+        if (key && !key.includes("/") && !SCAN_SKIP_ROOT.has(key.toLowerCase())) push(key);
+    }
+
+    const report = [];
+    const inspected = [];
+    for (const path of order.slice(0, 14)) {
+        const result = await inspectClientCandidate(connection, path);
+        report.push(result);
+        if (result.status === "ok") inspected.push(result);
+    }
+
+    inspected.sort((a, b) => b.count - a.count || b.score - a.score);
+    const autoBest = inspected[0] || null;
+    const forcedBest = forcedList.length
+        ? inspected
+              .filter((result) => forcedList.includes(result.path))
+              .sort((a, b) => forcedList.indexOf(a.path) - forcedList.indexOf(b.path))[0] || null
+        : null;
+
+    const chosen = forcedBest || autoBest;
+    const overrideConflicts = Boolean(forcedBest && autoBest && forcedBest.path !== autoBest.path);
+    const overrideBroken = Boolean(Number.isInteger(store.schemaOverride) && !forcedBest);
+
     let simsNode = null;
-
-    for (const candidate of candidates.slice(0, 9)) {
-        try {
-            const { data } = await readNode(connection, candidate);
-            const entries = objectEntries(data);
-            if (!entries.length) continue;
-
-            if (isPingOnly(entries.map(([, value]) => value))) {
-                skipped.push(`${candidate}: ping-only decoy`);
-                continue;
+    let simsPath = "";
+    if (chosen) {
+        const sidecar = simSidecarPath(chosen.path);
+        if (sidecar) {
+            try {
+                simsNode = (await readNode(connection, sidecar)).data;
+                simsPath = sidecar;
+            } catch {
+                simsNode = null;
             }
-            const score = entries
-                .slice(0, 3)
-                .reduce((sum, [, value]) => sum + deviceFieldScore(value), 0);
-            if (score === 0) {
-                skipped.push(`${candidate}: no device fields`);
-                continue;
-            }
-
-            clientsPath = candidate;
-            rawClients = data;
-
-            const sidecarPath = simSidecarPath(candidate);
-            if (sidecarPath) {
-                try {
-                    simsNode = (await readNode(connection, sidecarPath)).data;
-                } catch {
-                    simsNode = null;
-                }
-            }
-            break;
-        } catch {
-            skipped.push(`${candidate}: unreadable`);
         }
     }
 
-    return { clientsPath, rawClients, simsNode, skipped };
+    return {
+        clientsPath: chosen?.path || "",
+        rawClients: chosen?.data || null,
+        simsNode,
+        simsPath,
+        report,
+        autoBest,
+        forcedBest,
+        overrideConflicts,
+        overrideBroken,
+    };
 }
 
 /** Does this record look like a message rather than a device? */
@@ -444,7 +582,7 @@ function looksLikeMessageRecord(record) {
     if (!record || typeof record !== "object" || Array.isArray(record)) return false;
     const keys = Object.keys(record).map((key) => key.toLowerCase());
     const bodies = ["body", "message", "text", "msg", "content", "sms"];
-    const meta = ["from", "sender", "to", "address", "timestamp", "time", "date", "type"];
+    const meta = ["from", "sender", "to", "address", "timestamp", "time", "date", "type", "sent", "received"];
     return (
         bodies.some((key) => keys.includes(key)) ||
         meta.filter((key) => keys.includes(key)).length >= 2
@@ -452,29 +590,67 @@ function looksLikeMessageRecord(record) {
 }
 
 /**
- * Load messages from the first candidate node that actually holds records.
- * A global list node (message ids as keys) is read in one bounded call; a
- * per-device map (device ids as keys) is read device by device, capped like the
- * original build (60 devices × 150 messages).
+ * Message discovery, in priority order:
+ *   1. the schema candidate nodes (global list or per-device map)
+ *   2. message nodes nested inside each device record
+ *   3. a generic scan of the remaining root keys, for databases whose message
+ *      node is named something the alias tables do not know
  */
 async function resolveMessages(connection) {
-    const candidates = nodeCandidates(store.schemaOverride, "messages");
-    const collected = [];
-    const seen = new Set();
-    let firstRecord = null;
-    let label = "";
+    const state = { collected: [], seen: new Set(), firstRecord: null, label: "" };
 
     const add = (deviceId, list) => {
         for (const message of list) {
             const key = `${deviceId}|${message.id}|${message.ts ?? ""}`;
-            if (seen.has(key)) continue;
-            seen.add(key);
-            if (!firstRecord && message.raw) firstRecord = message.raw;
-            collected.push({ ...message, deviceId });
+            if (state.seen.has(key)) continue;
+            state.seen.add(key);
+            if (!state.firstRecord && message.raw) state.firstRecord = message.raw;
+            state.collected.push({ ...message, deviceId });
         }
     };
 
-    for (const candidate of candidates) {
+    const normalizeFor = (deviceId, pairs) => {
+        const device = runtime.deviceById.get(deviceId);
+        return pairs.map(([id, raw]) =>
+            normalizeMessage(raw, id, { deviceNumber: device?.phoneNumber || "" }),
+        );
+    };
+
+    const collectGlobalList = async (path) => {
+        const { data } = await readNode(connection, path, { limitToLast: MAX_MESSAGES });
+        const pairs = messagePairs(data);
+        if (!pairs.length) return 0;
+        for (const [id, raw] of pairs) {
+            const deviceId = deviceIdFromMessage(raw) || matchDeviceByAddress(raw) || "unassigned";
+            add(deviceId, normalizeFor(deviceId, [[id, raw]]));
+        }
+        return pairs.length;
+    };
+
+    const collectDeviceMap = async (path, keys) => {
+        const batch = keys.slice(0, MAX_MESSAGE_DEVICES);
+        const results = await Promise.all(
+            batch.map(async (deviceId) => {
+                try {
+                    const { data } = await readNode(connection, `${path}/${deviceId}`, {
+                        limitToLast: PER_DEVICE_MESSAGE_LIMIT,
+                    });
+                    return [deviceId, messagePairs(data)];
+                } catch {
+                    return [deviceId, []];
+                }
+            }),
+        );
+        let count = 0;
+        for (const [deviceId, pairs] of results) {
+            count += pairs.length;
+            add(deviceId, normalizeFor(deviceId, pairs));
+        }
+        return count;
+    };
+
+    // 1 — schema candidates
+    for (const candidate of nodeCandidates(store.schemaOverride, "messages")) {
         const keys = await shallowKeys(connection, candidate);
         if (!keys.length) continue;
 
@@ -486,57 +662,24 @@ async function resolveMessages(connection) {
         }
 
         if (looksLikeMessageRecord(sample)) {
-            try {
-                const { data } = await readNode(connection, candidate, { limitToLast: MAX_MESSAGES });
-                for (const [id, raw] of messagePairs(data)) {
-                    const deviceId = deviceIdFromMessage(raw) || matchDeviceByAddress(raw) || "unassigned";
-                    const device = runtime.deviceById.get(deviceId);
-                    add(deviceId, [
-                        normalizeMessage(raw, id, { deviceNumber: device?.phoneNumber || "" }),
-                    ]);
-                }
-                if (collected.length) {
-                    label = `${candidate} · global list`;
-                    break;
-                }
-            } catch {
-                /* next candidate */
+            const count = await collectGlobalList(candidate);
+            if (count) {
+                state.label = `${candidate} · global list`;
+                break;
             }
             continue;
         }
 
-        const batch = keys.slice(0, MAX_MESSAGE_DEVICES);
-        const results = await Promise.all(
-            batch.map(async (deviceId) => {
-                try {
-                    const { data } = await readNode(connection, `${candidate}/${deviceId}`, {
-                        limitToLast: PER_DEVICE_MESSAGE_LIMIT,
-                    });
-                    return [deviceId, messagePairs(data)];
-                } catch {
-                    return [deviceId, []];
-                }
-            }),
-        );
-
-        for (const [deviceId, pairs] of results) {
-            const device = runtime.deviceById.get(deviceId);
-            add(
-                deviceId,
-                pairs.map(([id, raw]) =>
-                    normalizeMessage(raw, id, { deviceNumber: device?.phoneNumber || "" }),
-                ),
-            );
-        }
-        if (collected.length) {
-            label = `${candidate} · ${batch.length} device node(s)`;
+        const count = await collectDeviceMap(candidate, keys);
+        if (count) {
+            state.label = `${candidate} · ${Math.min(keys.length, MAX_MESSAGE_DEVICES)} device node(s)`;
             break;
         }
     }
 
-    // Last resort — message nodes nested inside each device record.
-    if (!collected.length && runtime.layout?.clientsPath) {
-        const batch = runtime.devices.slice(0, 40);
+    // 2 — nested inside device records
+    if (!state.collected.length && runtime.layout?.clientsPath && runtime.devices.length) {
+        const batch = runtime.devices.slice(0, 60);
         const results = await Promise.all(
             batch.map(async (device) => {
                 try {
@@ -544,9 +687,7 @@ async function resolveMessages(connection) {
                         connection,
                         `${runtime.layout.clientsPath}/${device.id}`,
                     );
-                    const nested = subKeys.filter((key) =>
-                        /^(sms|messages|chats|inbox|sent|outbox|message_list)$/i.test(key),
-                    );
+                    const nested = subKeys.filter((key) => MESSAGE_NESTED_KEY.test(key));
                     if (!nested.length) return [device.id, []];
                     const { data } = await readNode(
                         connection,
@@ -559,25 +700,98 @@ async function resolveMessages(connection) {
                 }
             }),
         );
+        let count = 0;
         for (const [deviceId, pairs] of results) {
-            const device = runtime.deviceById.get(deviceId);
-            add(
-                deviceId,
-                pairs.map(([id, raw]) =>
-                    normalizeMessage(raw, id, { deviceNumber: device?.phoneNumber || "" }),
-                ),
-            );
+            count += pairs.length;
+            add(deviceId, normalizeFor(deviceId, pairs));
         }
-        if (collected.length) label = `${runtime.layout.clientsPath}/<id> · nested`;
+        if (count) state.label = `${runtime.layout.clientsPath}/<id> · nested`;
     }
 
-    return { messages: sortByTimeDesc(collected).slice(0, MAX_MESSAGES), firstRecord, label };
+    // 3 — generic root scan (handles node names the alias tables miss)
+    if (!state.collected.length) {
+        const collectNestedMap = async (basePath, keys, nestedKey) => {
+            const batch = keys.slice(0, MAX_MESSAGE_DEVICES);
+            const results = await Promise.all(
+                batch.map(async (deviceId) => {
+                    try {
+                        const { data } = await readNode(
+                            connection,
+                            `${basePath}/${deviceId}/${nestedKey}`,
+                            { limitToLast: PER_DEVICE_MESSAGE_LIMIT },
+                        );
+                        return [deviceId, messagePairs(data)];
+                    } catch {
+                        return [deviceId, []];
+                    }
+                }),
+            );
+            let count = 0;
+            for (const [deviceId, pairs] of results) {
+                count += pairs.length;
+                add(deviceId, normalizeFor(deviceId, pairs));
+            }
+            return count;
+        };
+
+        for (const key of runtime.layout?.rootKeys || []) {
+            if (key === runtime.layout?.clientsPath) continue;
+            if (SCAN_SKIP_ROOT.has(key.toLowerCase())) continue;
+            const keys = await shallowKeys(connection, key);
+            if (!keys.length) continue;
+
+            let child = null;
+            try {
+                child = (await readNode(connection, `${key}/${keys[0]}`)).data;
+            } catch {
+                child = null;
+            }
+            if (!child || typeof child !== "object") continue;
+
+            if (looksLikeMessageRecord(child)) {
+                const count = await collectGlobalList(key);
+                if (count) {
+                    state.label = `${key} · global list (scanned)`;
+                    break;
+                }
+                continue;
+            }
+
+            const nestedKey = Object.keys(child).find((name) => MESSAGE_NESTED_KEY.test(name));
+            if (nestedKey) {
+                const count = await collectNestedMap(key, keys, nestedKey);
+                if (count) {
+                    state.label = `${key}/<id>/${nestedKey} · nested (scanned)`;
+                    break;
+                }
+                continue;
+            }
+
+            const grandKey = Object.keys(child)[0];
+            let grandchild = null;
+            try {
+                grandchild = (await readNode(connection, `${key}/${keys[0]}/${grandKey}`)).data;
+            } catch {
+                grandchild = null;
+            }
+            if (looksLikeMessageRecord(grandchild)) {
+                const count = await collectDeviceMap(key, keys);
+                if (count) {
+                    state.label = `${key} · device map (scanned)`;
+                    break;
+                }
+            }
+        }
+    }
+
+    return {
+        messages: sortByTimeDesc(state.collected).slice(0, MAX_MESSAGES),
+        firstRecord: state.firstRecord,
+        label: state.label,
+        scanned: !state.label && Boolean(runtime.layout?.rootKeys?.length),
+    };
 }
 
-/**
- * Type 9 vs Type 6 hinges on whether commands live under All_User/Commands or
- * as a root /smsQueue node. Read-only probe — nothing is written.
- */
 async function probeCommandLayout(connection) {
     const commands = (await shallowKeys(connection, "All_User/Commands")).length
         ? "All_User/Commands"
@@ -615,7 +829,14 @@ async function loadDevices() {
     const notes = [`Device records at "${runtime.layout.clientsPath}".`];
     if (simsNode) notes.push(`SIM sidecar merged (${runtime.layout.simsPath}).`);
     if (entries.length > MAX_DEVICES) notes.push(`Showing first ${MAX_DEVICES} of ${entries.length}.`);
-    if (runtime.layout.skipped.length) notes.push(`Skipped → ${runtime.layout.skipped.join(", ")}.`);
+    const rejected = (runtime.layout.report || []).filter((entry) => entry.status !== "ok");
+    if (rejected.length) {
+        notes.push(
+            `Checked ${runtime.layout.report.length} candidates → ${rejected
+                .map((entry) => `${entry.path} (${entry.status})`)
+                .join(", ")}.`,
+        );
+    }
     setNotice(notes.join(" "), entries.length > MAX_DEVICES ? "warn" : "info");
 }
 
@@ -625,6 +846,7 @@ async function loadMessages() {
     runtime.messages = result.messages;
     runtime.messageSourceLabel = result.label;
     runtime.firstMessageRecord = result.firstRecord;
+    runtime.messagesScanned = Boolean(result.scanned);
 
     runtime.messageIndex = new Map();
     for (const message of runtime.messages) {
@@ -996,7 +1218,10 @@ function renderLayoutDetails() {
               `message node  : ${runtime.messageSourceLabel || "not found"}`,
               `messages read : ${runtime.messages.length}`,
               `command node  : ${runtime.commandPath || "none"} (read-only, never written)`,
-              `skipped nodes : ${runtime.layout.skipped.length ? runtime.layout.skipped.join(", ") : "none"}`,
+              `candidates    : ${(runtime.layout.report || [])
+                  .map((entry) => `${entry.path}=${entry.status}${entry.count ? `(${entry.count})` : ""}`)
+                  .join(", ")}`,
+              `auto choice   : ${runtime.layout.autoBest ? `${runtime.layout.autoBest.path} (${runtime.layout.autoBest.count} records)` : "none"}`,
           ].join("\n")
         : "Connect a database to inspect its structure.";
 
@@ -1089,6 +1314,7 @@ async function lookupForDevice(deviceId) {
             endpoint: $("lookupEndpoint").value.trim() || DEFAULT_LOOKUP_ENDPOINT,
             token: $("lookupToken").value.trim(),
             initData: $("lookupInitData").value,
+            proxyUrl: lookupProxyUrl(),
         });
         $("deviceLookupContent").innerHTML = renderLookupBody(result);
     } catch (error) {
@@ -1124,6 +1350,16 @@ function renderLookupBody(result) {
                 typeof result.data === "string" ? result.data : JSON.stringify(result.data, null, 2),
             )}</pre>
         </details>`;
+}
+
+/**
+ * Same-origin proxy shipped in api/lookup.js. Only used over http(s); the
+ * client falls back to it when the direct cross-origin call is blocked.
+ */
+function lookupProxyUrl() {
+    if (!/^https?:$/.test(location.protocol)) return "";
+    if (new URLSearchParams(location.search).get("direct") === "1") return "";
+    return new URL("/api/lookup", location.origin).toString();
 }
 
 /* ------------------------------ lookup tab -------------------------- */
@@ -1169,7 +1405,12 @@ async function submitLookup(event) {
     setLookupStatus("Checking…", "info");
 
     try {
-        const result = await checkMobile(mobile, { endpoint, token, initData });
+        const result = await checkMobile(mobile, {
+            endpoint,
+            token,
+            initData,
+            proxyUrl: lookupProxyUrl(),
+        });
         setLookupStatus(`Done in ${result.ms} ms (HTTP ${result.status}).`, "success");
         const node = $("lookupResult");
         node.innerHTML = renderLookupBody(result);
@@ -1506,10 +1747,21 @@ function wire() {
         toast("Lookup settings saved in this browser.", "success", 2200);
     });
 
+    $("resetOverrideBtn").addEventListener("click", async () => {
+        store.schemaOverride = null;
+        store.schemaOverrideLegacy = false;
+        saveStore();
+        renderSchemaBadge();
+        renderSchemaOptions();
+        toast("Layout override cleared — auto-detect active.", "success", 2400);
+        if (runtime.activeUrl) await connect(runtime.activeUrl);
+    });
+
     $("schemaOverrideSelect").addEventListener("change", async (event) => {
         const value = event.target.value;
         store.schemaOverride = value === "auto" ? null : Number.parseInt(value, 10);
         if (!Number.isInteger(store.schemaOverride)) store.schemaOverride = null;
+        store.schemaOverrideLegacy = false;
         saveStore();
         renderSchemaBadge();
         toast(
@@ -1577,6 +1829,17 @@ function wire() {
         }
         const openDeviceBtn = event.target.closest("[data-open-device]");
         if (openDeviceBtn) openDevice(openDeviceBtn.dataset.openDevice);
+    });
+
+    document.addEventListener("click", async (event) => {
+        const useAuto = event.target.closest("[data-use-auto]");
+        if (!useAuto) return;
+        store.schemaOverride = null;
+        saveStore();
+        renderSchemaBadge();
+        renderSchemaOptions();
+        toast("Layout override cleared — using auto-detected layout.", "success", 2600);
+        if (runtime.activeUrl) await connect(runtime.activeUrl);
     });
 
     // database list actions

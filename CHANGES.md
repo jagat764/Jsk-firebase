@@ -86,3 +86,27 @@ The read-only half of the original logic is back, unchanged in behaviour:
 
 Still absent by design: device command dispatch, SMS forwarding config, relay/proxy tables,
 bulk number harvesting and URL probing. The panel only issues `GET`s.
+
+## v10.3 — candidate ranking, message scan, lookup proxy
+
+Fixes the live-database symptoms: `Type 1 · manual` pinned to a thin `clients` node,
+`message node: not found`, and the CORS failure on the lookup call.
+
+* **Ranked candidate resolution.** Device nodes are no longer taken first-come: every
+  candidate is inspected, ping-only decoys and field-less nodes are rejected, and the node
+  with the most device records (then the strongest field score) wins. A thin/legacy `clients`
+  node can no longer hide `user_data`. The full report is printed in the Data tab.
+* **Stale override handling.** An override inherited from the previous build (`fbSchemaOverride`)
+  is cleared automatically when it disagrees with the ranked result — with a toast saying so.
+  A forced layout that finds nothing falls back to auto. Both cases show a one-click action in
+  the banner, and the Data tab gained a Reset button.
+* **Three-pass message discovery.** Schema candidates → message nodes nested in device records
+  → generic scan of remaining root keys (grandchild sampling so device maps and per-device
+  subtrees are both recognised). Empty feeds now say which nodes were probed.
+* **`/api/lookup` proxy.** `api/lookup.js` forwards the lookup server-side to defeat CORS:
+  POST only, host allow-list (`LOOKUP_ALLOWED_HOSTS` to extend), 8 KB body cap, no stored
+  credentials, 15 s upstream timeout, upstream status surfaced to the UI. The client retries
+  through it automatically and still reports the original error if the proxy is absent.
+* **Tests** 44 → 56 (proxy fallback + proxy handler validation), jsdom smoke now covers the
+  live-database shape (`clients` thin, `messages` empty, logs nested in `user_data`, stale
+  override) plus Type 1/6/10 and an unknown message node name.
