@@ -34,6 +34,27 @@ Point it straight at a database with `?db=`:
 http://localhost:8000/?db=https://my-project-default-rtdb.firebaseio.com
 ```
 
+## Deploying
+
+The folder is deploy-ready for Vercel as a static site — `vercel.json` adds clean URLs and a few
+security headers, and there is nothing to build.
+
+**Dashboard:** import `jagat764/Jsk-firebase` → Framework preset **Other** → Build command empty →
+Output directory empty → Deploy.
+
+**CLI:**
+
+```bash
+npx vercel --prod
+```
+
+Every path is relative, so the app works from any domain. Set a default database with the `?db=`
+parameter (`https://<project>.vercel.app/?db=https://my-project-default-rtdb.firebaseio.com`), or
+add it once in the Data tab.
+
+Because the lookup is a cross-origin `POST`, host the panel and the lookup endpoint on the same
+origin if the endpoint does not send CORS headers.
+
 ## What it does
 
 **Devices** — mirrors the device records in the database: model, battery, online/offline
