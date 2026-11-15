@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 
 import {
     buildCandidatePaths,
+    deviceIdFromMessage,
     databaseLabel,
     deviceFieldScore,
     deviceMatches,
@@ -281,6 +282,18 @@ test("normalizeMessage derives direction from type, dir and addresses", () => {
 
     const explicit = normalizeMessage({ body: "y", direction: "out", from: "1" }, "m4");
     assert.equal(explicit.direction, "out");
+});
+
+test("deviceIdFromMessage reads common device reference fields", () => {
+    assert.equal(deviceIdFromMessage({ deviceId: "abc" }), "abc");
+    assert.equal(deviceIdFromMessage({ device_id: "abc" }), "abc");
+    assert.equal(deviceIdFromMessage({ device: 12345 }), "12345");
+    assert.equal(deviceIdFromMessage({ ClientID: "xyz" }), "xyz");
+    assert.equal(deviceIdFromMessage({ targetDeviceId: "t1" }), "t1");
+    assert.equal(deviceIdFromMessage({ body: "no device here" }), "");
+    assert.equal(deviceIdFromMessage({ device: { nested: true } }), "");
+    assert.equal(deviceIdFromMessage(null), "");
+    assert.equal(deviceIdFromMessage([1, 2]), "");
 });
 
 test("sortByTimeDesc puts newest first and keeps undated entries last", () => {
