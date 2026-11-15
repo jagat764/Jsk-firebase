@@ -1,0 +1,11 @@
+{
+  "name": "firebase-manager-pro",
+  "version": "10.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Admin panel for Firebase Realtime Databases you own — device inventory, message viewer, mobile lookup.",
+  "scripts": {
+    "start": "python3 -m http.server 8000",
+    "test": "node --test"
+  }
+}

