@@ -21,6 +21,7 @@ import {
   loadBadNumbers,
   parsePanelLink,
 } from "./schemes.js";
+import { databaseReadUrl, shallowReadUrl } from "./lib/firebase-rest.js";
 // Reuse the existing Firebase write paths without adding UI controls or changing their payloads.
 const writeData = (databaseRef, value) => set(databaseRef, value);
 let currentActiveTab = "clients",
@@ -1189,6 +1190,13 @@ const LOAD_STEPS = [
       "user_list",
       "users",
       "Users",
+      "profiles",
+      "Profiles",
+      "device_profiles",
+      "deviceProfiles",
+      "DeviceInfo",
+      "device_info",
+      "deviceInfo",
       "clients",
       "Clients",
       "devices",
@@ -1220,6 +1228,25 @@ function nodeCandidates(key) {
     list.includes(key) || list.push(key),
     list
   );
+}
+async function discoverClientCandidates() {
+  const candidates = nodeCandidates("clients"),
+    add = (path) => {
+      path && !candidates.includes(path) && candidates.push(path);
+    };
+  const rootKeys = await readShallowKeys(basePath(""));
+  if (!rootKeys) return candidates;
+  for (const rootKey of rootKeys) {
+    if (/(client|device|user|profile|inventory|record|account)/i.test(rootKey))
+      add(rootKey);
+    if (!/^all.?users?$/i.test(rootKey)) continue;
+    const children = await readShallowKeys(basePath(rootKey));
+    (children || []).forEach((child) => {
+      /^(info|device.?info|data|user|clients?|devices?|profiles?)$/i.test(child) &&
+        add(rootKey + "/" + child);
+    });
+  }
+  return candidates;
 }
 const COMMAND_CANDIDATES_BY_SCHEMA = {
   6: ["All_User/Commands", "All_Users/Commands"],
@@ -1523,18 +1550,28 @@ const APPLIERS = {
   MSG_LIVE_MAX_DEVICES = 25;
 let messagesTruncated = !1,
   messagesDeviceTotal = 0;
+async function readDatabaseNode(path) {
+  const controller = new AbortController(),
+    timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(databaseReadUrl(activeDatabaseUrl, path), {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const detail = response.status === 401 || response.status === 403
+        ? "Permission denied — check this database's read rules or auth token."
+        : `HTTP ${response.status}`;
+      throw new Error(`Firebase read ${path}: ${detail}`);
+    }
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
 async function readShallowKeys(path) {
   try {
-    const base = dbUrlBase(activeDatabaseUrl).replace(/\/+$/, ""),
-      segments = String(path || "")
-        .replace(/^\/+|\/+$/g, "")
-        .split("/")
-        .filter(Boolean)
-        .map(encodeURIComponent),
-      url = new URL(`${base}/${segments.length ? segments.join("/") + "/" : ""}.json`),
-      auth = dbUrlAuth(activeDatabaseUrl);
-    url.searchParams.set("shallow", "true");
-    auth && url.searchParams.set("auth", auth);
+    const url = shallowReadUrl(activeDatabaseUrl, path);
     const controller = new AbortController(),
       timer = setTimeout(() => controller.abort(), 8000);
     try {
@@ -1636,7 +1673,10 @@ async function loadSequentially() {
         `Loading ${step.label} (${loadProgress.done + 1}/${loadProgress.total})…`,
         "#22d3ee",
       ));
-    const candidates = nodeCandidates(step.key);
+    const candidates =
+      step.key === "clients"
+        ? await discoverClientCandidates()
+        : nodeCandidates(step.key);
     let applied = !1;
     for (const cand of candidates)
       try {
@@ -1650,7 +1690,14 @@ async function loadSequentially() {
           }
           continue;
         }
-        const snap = await get(ref(db, basePath(cand)));
+        const nodePath = basePath(cand);
+        let snap;
+        if (step.key === "clients") {
+          const value = await readDatabaseNode(nodePath);
+          snap = { exists: () => value !== null, val: () => value };
+        } else {
+          snap = await get(ref(db, nodePath));
+        }
         if (snap.exists()) {
           if (step.key === "clients") {
             if (isPingOnlyNode(snap.val())) {
