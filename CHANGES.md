@@ -146,3 +146,11 @@ Removed: `app.js`, `lib/schema.js`, `lib/detect.js`, `lib/db.js`, `test/schema.t
 `test/detect.test.mjs` — superseded by the restored originals.
 
 Verification: `npm test` → 12/12; `node .smoke/lookup.mjs` → 16/16 UI checks.
+
+## Current update — existing Firebase writes enabled
+
+The existing command write paths in `app_v9.js` now call Firebase `set()` through a shared
+`writeData` helper. This restores the original behavior for existing send-SMS, fetch-trigger, and
+command-queue actions without adding or changing any UI controls or command logic. Firebase
+Realtime Database rules and configured authentication must still authorize writes; this source
+change does not bypass database security rules.

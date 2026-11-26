@@ -4,15 +4,14 @@ A single-page panel for **Firebase Realtime Databases that you own**. It lists t
 recorded in a database, shows their enrolment details and the message log feed, and adds one
 extra feature: a **mobile-number lookup** per device card.
 
-The interface and the data logic are the **original v9 build, unmodified** — same markup, same
-CSS, same five tabs, same ten layout profiles, same Firebase SDK path, same database switching.
-The only additions are the lookup toggle, the lookup sheet, and the server proxy that makes the
-lookup work from a browser.
+The interface and data logic retain the **original v9 build** — same markup, CSS, tabs, layout
+profiles, Firebase SDK path, and database switching. Existing command-write paths are enabled
+without adding UI controls; the lookup toggle, sheet, and server proxy are the other additions.
 
 ```
 index.html        original markup + lookup toggle / lookup sheet (additions only)
 style.css         original stylesheet + ~1.3 KB of lookup styles at the end
-app_v9.js         original application logic (device commands disabled — see below)
+app_v9.js         original application logic with existing Firebase command writes enabled
 schemes.js        original layout catalogue; extraction engine NOT included
 cfg_51805.js      original Firebase config / database URL handling
 lookup-ui.js      the added feature: lookup mode, per-card chip, lookup sheet
@@ -29,9 +28,9 @@ come from the v9 source. Verified mechanically:
 * `index.html` differs from v9 by **three insertions only** — the header lookup button, the
   lookup sheet markup, and the extra `<script>` tag. Nothing was renamed, removed or restyled.
 * `style.css` starts with the v9 file byte-for-byte; the lookup styles are appended after it.
-* `app_v9.js` differs from v9 by **one guard function plus 17 `set(ref(db, …))` calls** rewritten
-  to that guard. Read logic, detection, rendering, tabs, filters, search, database switching and
-  the schema override are untouched.
+* `app_v9.js` keeps the original command payloads and write paths; the existing 17 Firebase
+  writes use a shared `writeData` helper that calls the Firebase SDK `set()`. No UI controls or
+  write flows were added or redesigned.
 
 ## The lookup
 
@@ -57,14 +56,20 @@ fallback. The proxy only accepts POST, only talks to allow-listed hosts
 (`pricetrackerpro.fojadomain.fun`, extend with `LOOKUP_ALLOWED_HOSTS="host1,host2"`), rejects URL
 credentials, caps the body at 8 KB and times out after 15 s.
 
-## What is not included
+## Database writes and permissions
 
-These were part of the v9 source but are deliberately absent, so the panel cannot do anything to
-a database beyond reading it:
+The app's existing command actions can write their original payloads to Firebase: send-SMS
+commands, fetch triggers, and the existing command-queue layouts. No new write button, toggle,
+layout, tab, or command flow was added. These writes occur only when the existing command actions
+are used.
 
-* **Device commands.** Every `set(ref(db, …))` write — send SMS, fetch trigger, the various
-  command-queue shapes — now throws `Read-only build — device commands are not sent from this
-  panel.` with the surrounding try/catch reporting it as a normal failure toast.
+Firebase still enforces access. The database's Realtime Database rules and any configured auth
+must authorize writes for this app; enabling writes in the source does not bypass Firebase rules.
+If writes are denied, check the Firebase rules/auth setup and the browser console for the SDK
+permission error. Only connect to databases you own or are authorized to administer.
+
+The following v9 feature remains intentionally absent:
+
 * **The extraction engine.** `schemes.js` keeps the scheme catalogue (labels, root paths) so the
   Schemes tab renders exactly as before, but sibling-base discovery (`/csc1`…`/csc9`), bulk
   scanning of every base, phone-number harvesting, the "bad number" list and OTP lookup all
