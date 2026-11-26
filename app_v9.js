@@ -697,7 +697,6 @@ function normalizeClient(raw, sim) {
           "Name",
           "name",
           "device_name",
-          "deviceName",
           "device_name_model",
           "model",
           "Model",
@@ -706,11 +705,12 @@ function normalizeClient(raw, sim) {
           "device_model",
           "deviceModel",
           "phoneModel",
+          "d_name",
+          "deviceName",
           "brand",
           "manufacturer",
           "product",
           "label",
-          "d_name",
         ]) ||
         firstOf(dinfo, ["model", "Model", "modelName", "deviceName", "name"]) ||
         "Unknown Device"),
@@ -750,7 +750,8 @@ function normalizeClient(raw, sim) {
     s !== void 0 && (c.status = toBoolStatus(s));
   }
   const normalizedSims = normalizeClientSims(raw, sim);
-  c.sims = normalizedSims;
+  if (normalizedSims.length) c.sims = normalizedSims;
+  else delete c.sims;
   if (!c.mobNo) {
     const m = firstOf(raw, [
       "phoneNumber",
@@ -779,10 +780,9 @@ function normalizeClient(raw, sim) {
     typeof c.mobNo === "string" || typeof c.mobNo === "number"
       ? String(c.mobNo).trim()
       : "";
-  if (primaryMobile.replace(/\D/g, "").length >= 10) {
+  if (primaryMobile.replace(/\D/g, "").length >= 10 && Array.isArray(c.sims)) {
     const primarySim = c.sims.find((entry) => !entry.phoneNumber);
     if (primarySim) primarySim.phoneNumber = primaryMobile;
-    else if (!c.sims.length) c.sims = [{ phoneNumber: primaryMobile, slot: 1 }];
   }
   const explicitDualSim =
     firstOf(raw, ["dualSim", "dualsim", "isDualSim", "is_dual_sim", "DualSim", "DualSIM"]) ??
@@ -792,7 +792,7 @@ function normalizeClient(raw, sim) {
   if (c.dualSim === void 0 && explicitDualSim !== void 0) {
     c.dualSim = toBoolStatus(explicitDualSim);
   }
-  if (c.dualSim === void 0 && c.sims.length > 1) c.dualSim = !0;
+  if (c.dualSim === void 0 && Array.isArray(c.sims) && c.sims.length > 1) c.dualSim = !0;
   if (
     (c.person || (c.person = firstOf(raw, ["Name", "name"])),
     c.aadhaar || (c.aadhaar = firstOf(raw, ["Aadhaar", "aadhaar", "aadhar"])),
