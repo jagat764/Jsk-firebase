@@ -1229,11 +1229,26 @@ function nodeCandidates(key) {
     list
   );
 }
+let preloadedClientNode = null;
 async function discoverClientCandidates() {
   const candidates = nodeCandidates("clients"),
     add = (path) => {
       path && !candidates.includes(path) && candidates.push(path);
     };
+  if (!schemaIsManual()) {
+    if (!candidates.includes("clients")) candidates.unshift("clients");
+    try {
+      const clientsValue = await readDatabaseNode(basePath("clients"));
+      if (
+        clientsValue !== null &&
+        !isPingOnlyNode(clientsValue) &&
+        hasClientRecords(clientsValue)
+      ) {
+        preloadedClientNode = clientsValue;
+        return ["clients"];
+      }
+    } catch (e) {}
+  }
   const rootKeys = await readShallowKeys(basePath(""));
   if (!rootKeys) return candidates;
   for (const rootKey of rootKeys) {
@@ -1667,6 +1682,7 @@ async function loadSequentially() {
     setLoadStatus("Starting sequential load…", "#64748b"));
   let clientsRead = !1,
     clientsReadError = "";
+  preloadedClientNode = null;
   for (const step of LOAD_STEPS) {
     ((loadProgress.current = step.label),
       setLoadStatus(
@@ -1693,7 +1709,10 @@ async function loadSequentially() {
         const nodePath = basePath(cand);
         let snap;
         if (step.key === "clients") {
-          const value = await readDatabaseNode(nodePath);
+          const value = cand === "clients" && preloadedClientNode
+            ? preloadedClientNode
+            : await readDatabaseNode(nodePath);
+          preloadedClientNode = null;
           snap = { exists: () => value !== null, val: () => value };
         } else {
           snap = await get(ref(db, nodePath));
