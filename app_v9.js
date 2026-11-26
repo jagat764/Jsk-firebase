@@ -601,10 +601,7 @@ function isPingOnlyNode(node) {
 }
 function hasClientRecords(node) {
   if (!node || typeof node != "object") return !1;
-  return Object.keys(node).some((key) => {
-    const value = node[key];
-    return isValidDeviceId(key) && value && typeof value === "object";
-  });
+  return Object.keys(normalizeClients(node, null)).length > 0;
 }
 function detectSchema() {
   const evidence = [];
@@ -1189,8 +1186,17 @@ const LOAD_STEPS = [
       "All_User/Data",
       "All_Users/Data",
       "All_User/User",
+      "userData",
+      "UserData",
+      "user_list",
+      "users",
+      "Users",
       "clients",
+      "Clients",
       "devices",
+      "Devices",
+      "data",
+      "Data",
     ],
     messages: ["All_User/Sms", "All_Users/Sms", "Sms", "messages", "user_sms"],
     bot_users: [
@@ -1604,6 +1610,8 @@ async function loadSequentially() {
     (pendingReload = !1),
     (loadProgress = { done: 0, total: LOAD_STEPS.length, current: "" }),
     setLoadStatus("Starting sequential load…", "#64748b"));
+  let clientsRead = !1,
+    clientsReadError = "";
   for (const step of LOAD_STEPS) {
     ((loadProgress.current = step.label),
       setLoadStatus(
@@ -1648,8 +1656,17 @@ async function loadSequentially() {
           break;
         }
       } catch (e) {
-        console.warn(`[seq] ${step.label} @ ${cand} failed:`, e && e.message);
+        const message = String(e && (e.message || e.code) || "Firebase read failed");
+        console.warn(`[seq] ${step.label} @ ${cand} failed:`, message);
+        if (step.key === "clients") {
+          clientsReadError = /permission.denied|unauthorized/i.test(
+            `${e && e.code || ""} ${message}`,
+          )
+            ? "Permission denied — check this database's read rules or auth token."
+            : message;
+        }
       }
+    step.key === "clients" && applied && (clientsRead = !0);
     (applied ||
       (step.key === "clients"
         ? applyClients(null, null)
@@ -1663,7 +1680,14 @@ async function loadSequentially() {
       await new Promise((r) => setTimeout(r, 0)));
   }
   if (
-    (setLoadStatus(`All ${loadProgress.total} nodes loaded`, "#34d399"),
+    (setLoadStatus(
+      clientsRead
+        ? `All ${loadProgress.total} nodes loaded`
+        : clientsReadError
+          ? `Data load failed: ${clientsReadError}`
+          : "No supported device data node found — check the data path and schema",
+      clientsRead ? "#34d399" : clientsReadError ? "#fb7185" : "#fbbf24",
+    ),
     (isLoadingSequence = !1),
     await detectRootSmsQueue(!0),
     detectSchema(),
