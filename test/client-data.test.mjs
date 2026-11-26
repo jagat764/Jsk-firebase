@@ -4,10 +4,46 @@ import assert from "node:assert/strict";
 import {
     firstSimMobile,
     hasClientRecords,
+    mergeClientProfile,
     phoneNumbersForClient,
     providerForClient,
     simCountForClient,
 } from "../lib/client-data.js";
+
+test("merges nested device profile fields while retaining populated top-level values", () => {
+    const profile = mergeClientProfile({
+        deviceInfo: {
+            model: "Pixel 8",
+            battery: 82,
+            androidVersion: "14",
+            cpuArch: "arm64-v8a",
+            ipAddress: "192.0.2.5",
+        },
+        profile: { mobNo: "9876543210", service_provider: "Airtel" },
+        device: { deviceId: "nested-device-id" },
+        model: "",
+        modelName: "",
+        battery: 0,
+        status: false,
+    });
+
+    assert.equal(profile.model, "Pixel 8");
+    assert.equal(profile.modelName, "");
+    assert.equal(profile.deviceId, "nested-device-id");
+    assert.equal(profile.battery, 0);
+    assert.equal(profile.androidVersion, "14");
+    assert.equal(profile.cpuArch, "arm64-v8a");
+    assert.equal(profile.ipAddress, "192.0.2.5");
+    assert.equal(profile.mobNo, "9876543210");
+    assert.equal(profile.service_provider, "Airtel");
+    assert.equal(profile.status, false);
+});
+
+test("ignores invalid nested profile containers", () => {
+    assert.deepEqual(mergeClientProfile(null), {});
+    assert.deepEqual(mergeClientProfile(["not", "a", "profile"]), {});
+    assert.equal(mergeClientProfile({ data: [1, 2], name: "Device" }).name, "Device");
+});
 
 test("recognizes object-valued client records without normalizing the full payload", () => {
     assert.equal(hasClientRecords({ deviceA: { model: "Pixel" } }), true);

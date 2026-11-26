@@ -25,6 +25,7 @@ import { databaseReadUrl, shallowReadUrl } from "./lib/firebase-rest.js";
 import {
   firstSimMobile,
   hasClientRecords,
+  mergeClientProfile,
   phoneNumbersForClient,
   providerForClient,
   simCountForClient,
@@ -724,8 +725,16 @@ function simsFromInlineFields(raw) {
 }
 function normalizeClient(raw, sim) {
   if (!raw || typeof raw != "object") return null;
+  raw = mergeClientProfile(raw);
   const c = { ...raw };
-  const dinfo = parseDeviceInfoString(raw.Device_info || raw.device_info);
+  const rawDeviceInfo = firstOf(raw, ["Device_info", "device_info", "DeviceInfo", "deviceInfo"]),
+    dinfo =
+      typeof rawDeviceInfo === "string"
+        ? parseDeviceInfoString(rawDeviceInfo)
+        : rawDeviceInfo && typeof rawDeviceInfo === "object"
+          ? rawDeviceInfo
+          : {},
+    osVersion = firstOf(dinfo, ["os", "osVersion", "androidVersion"]);
   if (
     (c.modelName ||
       (c.modelName =
@@ -734,13 +743,21 @@ function normalizeClient(raw, sim) {
           "name",
           "device_name",
           "deviceName",
+          "device_name_model",
           "model",
           "Model",
+          "model_name",
+          "modelName",
           "device_model",
+          "deviceModel",
+          "phoneModel",
+          "brand",
+          "manufacturer",
+          "product",
           "label",
           "d_name",
         ]) ||
-        dinfo.model ||
+        firstOf(dinfo, ["model", "Model", "modelName", "deviceName", "name"]) ||
         "Unknown Device"),
     c.battery === void 0 || c.battery === null || c.battery === "")
   ) {
@@ -897,10 +914,14 @@ function normalizeClient(raw, sim) {
       (c.androidV = firstOf(raw, [
         "androidVersion",
         "android_version",
+        "osVersion",
+        "os_version",
         "sdk",
         "sdkV",
       ]) ||
-        (dinfo.os ? dinfo.os.replace(/^Android\s*/i, "") : void 0)),
+        (osVersion == null
+          ? void 0
+          : String(osVersion).replace(/^Android\s*/i, ""))),
     c.cpu_arch || (c.cpu_arch = firstOf(raw, ["cpuArch", "arch", "abi"])),
     c.storage ||
       (c.storage = firstOf(raw, ["totalStorage", "storageTotal", "disk"])),
@@ -932,7 +953,15 @@ function normalizeClients(node, simsNode) {
       if (!isValidDeviceId(k)) return;
       const rawNode = node[k];
       if (!rawNode || typeof rawNode != "object") return;
-      const did = rawNode.did || rawNode.Did || rawNode.device || k,
+      const profileNode = mergeClientProfile(rawNode),
+        deviceField = profileNode.device,
+        did =
+          profileNode.did ||
+          profileNode.Did ||
+          (typeof deviceField === "string" || typeof deviceField === "number"
+            ? deviceField
+            : firstOf(profileNode, ["deviceId", "device_id", "id"])) ||
+          k,
         sim =
           (simsNode &&
             typeof simsNode == "object" &&
@@ -940,10 +969,10 @@ function normalizeClients(node, simsNode) {
           null,
         n = (() => {
           try {
-            return normalizeClient(rawNode, sim);
+            return normalizeClient(profileNode, sim);
           } catch (error) {
             console.warn(`[clients] profile ${k} normalization failed:`, error);
-            return { ...rawNode, modelName: "Unknown Device" };
+            return { ...profileNode, modelName: "Unknown Device" };
           }
         })();
       n &&
