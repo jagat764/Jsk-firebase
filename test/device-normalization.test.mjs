@@ -49,6 +49,20 @@ test("Type 6 sidecar parses the stored phone and selects the carrier suffix", ()
     assert.deepEqual(JSON.parse(JSON.stringify(api.getSimBadge(client))), { label: "1 SIM", dual: false });
 });
 
+test("Type 3 RTX aliases preserve model, charge, status, and SIM1 phone", () => {
+    const client = api.normalizeClient({
+        device_name: "Redmi Note 9",
+        charge: "64",
+        Sim1: "9876500000",
+        status: "Online",
+    }, null);
+
+    assert.equal(client.modelName, "Redmi Note 9");
+    assert.equal(client.battery, "64");
+    assert.equal(client.status, true);
+    assert.deepEqual(Array.from(api.getPhoneNumbers(client)), ["9876500000"]);
+});
+
 test("Type 10 user_data extracts d_name, Device_info, and each live SIM field", () => {
     const raw = {
         Device_info: "Model: CPH2665\\nOS Version: Android 16\\nDevice Name: OPPO CPH2665\\nDevice ID: device-10",
@@ -100,6 +114,18 @@ test("Type 10 dual SIM record retains both phone slots and carrier names", () =>
     assert.deepEqual(JSON.parse(JSON.stringify(api.getSimBadge(client))), { label: "2 SIM · DUAL", dual: true });
     assert.deepEqual(Array.from(api.getCarriers(client)), ["Jio", "Vi India"]);
     assert.deepEqual(Array.from(api.getPhoneNumbers(client)), ["9350515282", "9350515283"]);
+});
+
+test("normalizeClients associates the SIM sidecar by the record did", () => {
+    const clients = api.normalizeClients({
+        recordKey: { Name: "CPH2015", did: "device-sidecar" },
+    }, {
+        "device-sidecar": { sim1: "9876501234 - Carrier X" },
+    });
+
+    assert.deepEqual(Array.from(Object.keys(clients)), ["device-sidecar"]);
+    assert.deepEqual(Array.from(api.getPhoneNumbers(clients["device-sidecar"])), ["9876501234"]);
+    assert.deepEqual(Array.from(api.getCarriers(clients["device-sidecar"])), ["Carrier X"]);
 });
 
 test("a general phoneNumber does not falsely imply a physical SIM slot", () => {
