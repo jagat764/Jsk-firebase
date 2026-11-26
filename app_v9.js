@@ -22,6 +22,12 @@ import {
   parsePanelLink,
 } from "./schemes.js";
 import { databaseReadUrl, shallowReadUrl } from "./lib/firebase-rest.js";
+import {
+  hasClientRecords,
+  phoneNumbersForClient,
+  providerForClient,
+  simCountForClient,
+} from "./lib/client-data.js";
 // Reuse the existing Firebase write paths without adding UI controls or changing their payloads.
 const writeData = (databaseRef, value) => set(databaseRef, value);
 let currentActiveTab = "clients",
@@ -452,43 +458,11 @@ function isValidDeviceId(id) {
   );
 }
 function getPhoneNumbers(client) {
-  const numbers = [];
-  return (
-    client.mobNo &&
-      client.mobNo.trim() &&
-      client.mobNo.trim() !== "Unknown" &&
-      numbers.push(client.mobNo.trim()),
-    client.sims &&
-      Array.isArray(client.sims) &&
-      client.sims.forEach((sim) => {
-        if (
-          sim &&
-          sim.phoneNumber &&
-          sim.phoneNumber.trim() &&
-          sim.phoneNumber.trim() !== "Unknown"
-        ) {
-          const num = sim.phoneNumber.trim();
-          numbers.includes(num) || numbers.push(num);
-        }
-      }),
-    numbers.length > 0 ? numbers : null
-  );
+  const numbers = phoneNumbersForClient(client);
+  return numbers.length ? numbers : null;
 }
 function getProviderLabel(client) {
-  if (
-    client.service_provider &&
-    client.service_provider.trim() &&
-    client.service_provider.trim() !== "Unknown"
-  )
-    return client.service_provider.trim();
-  if (client.sims && Array.isArray(client.sims) && client.sims.length > 0) {
-    const providers = client.sims
-      .map((s) => s.carrierName)
-      .filter(Boolean)
-      .filter((v) => v !== "Unknown");
-    if (providers.length > 0) return providers.join(" | ");
-  }
-  return "—";
+  return providerForClient(client);
 }
 function getCarriers(client) {
   if (!client || !Array.isArray(client.sims)) return [];
@@ -513,11 +487,7 @@ function getSimBadge(client) {
         : null;
 }
 function getSimCount(client) {
-  return client.sims && Array.isArray(client.sims)
-    ? client.sims.filter(
-        (s) => s && s.phoneNumber && s.phoneNumber !== "Unknown",
-      ).length
-    : 0;
+  return simCountForClient(client);
 }
 let detectedSchema = 1,
   schemaEvidence = [],
@@ -597,10 +567,6 @@ function isPingOnlyNode(node) {
     const f = Object.keys(v);
     return f.length > 0 && f.every((x) => x === "ping");
   });
-}
-function hasClientRecords(node) {
-  if (!node || typeof node != "object") return !1;
-  return Object.keys(normalizeClients(node, null)).length > 0;
 }
 function detectSchema() {
   const evidence = [];
@@ -971,10 +937,22 @@ function normalizeClients(node, simsNode) {
             typeof simsNode == "object" &&
             (simsNode[did] || simsNode[k])) ||
           null,
-        n = normalizeClient(rawNode, sim);
+        n = (() => {
+          try {
+            return normalizeClient(rawNode, sim);
+          } catch (error) {
+            console.warn(`[clients] profile ${k} normalization failed:`, error);
+            return { ...rawNode, modelName: "Unknown Device" };
+          }
+        })();
       n &&
-        ((n.clientId = k),
+        ((n.modelName =
+          typeof n.modelName === "string" || typeof n.modelName === "number"
+            ? String(n.modelName)
+            : "Unknown Device"),
+        (n.clientId = k),
         (n.deviceId = String(did)),
+        n.mobNo != null && typeof n.mobNo !== "object" && (n.mobNo = String(n.mobNo)),
         !n.mobNo &&
           n.sims &&
           n.sims.length &&
@@ -2323,7 +2301,7 @@ function generateClientsView(clientsNode) {
       )
         return;
       const battery = (item.battery || "0").toString().replace("%", ""),
-        model = item.modelName || "Unknown Device",
+        model = String(item.modelName || "Unknown Device"),
         storage = item.storage || "—",
         androidVer = item.androidV ? "API " + item.androidV : "Base",
         ipAddr = item.ip_address || "—",
