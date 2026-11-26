@@ -1350,7 +1350,7 @@ let autoRefreshEnabled = !0,
   autoRefreshTimer = null,
   lastMessagesSync = 0,
   messagesSyncBusy = !1;
-const AUTO_REFRESH_MS = 15e3;
+const AUTO_REFRESH_MS = 10e3;
 function loadAutoRefreshPref() {
   try {
     const v = localStorage.getItem("fbAutoRefresh");
@@ -1525,10 +1525,29 @@ let messagesTruncated = !1,
   messagesDeviceTotal = 0;
 async function readShallowKeys(path) {
   try {
-    const snap = await get(ref(db, path));
-    if (!snap.exists()) return null;
-    const v = snap.val();
-    return v && typeof v == "object" ? Object.keys(v) : null;
+    const base = dbUrlBase(activeDatabaseUrl).replace(/\/+$/, ""),
+      segments = String(path || "")
+        .replace(/^\/+|\/+$/g, "")
+        .split("/")
+        .filter(Boolean)
+        .map(encodeURIComponent),
+      url = new URL(`${base}/${segments.length ? segments.join("/") + "/" : ""}.json`),
+      auth = dbUrlAuth(activeDatabaseUrl);
+    url.searchParams.set("shallow", "true");
+    auth && url.searchParams.set("auth", auth);
+    const controller = new AbortController(),
+      timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const response = await fetch(url, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      const value = await response.json();
+      return value && typeof value === "object" ? Object.keys(value) : null;
+    } finally {
+      clearTimeout(timer);
+    }
   } catch (e) {
     return null;
   }
@@ -1550,7 +1569,8 @@ async function loadMessagesBounded(path) {
   const keys = await readShallowKeys(path);
   if (!keys) return null;
   messagesDeviceTotal = keys.length;
-  const take = keys.slice(0, MSG_DEVICE_LIMIT);
+  // Firebase keys are ordered lexicographically; the tail includes newer push-style device IDs.
+  const take = keys.slice(-MSG_DEVICE_LIMIT);
   messagesTruncated = keys.length > take.length;
   const out = {};
   for (let i = 0; i < take.length; i += 3) {
