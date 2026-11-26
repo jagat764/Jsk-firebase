@@ -13,6 +13,8 @@
  *  - the caller supplies their own token; nothing is stored server-side
  */
 
+import { isValidMobile, normalizeMobile } from "../lib/lookup.js";
+
 const DEFAULT_ALLOWED_HOSTS = ["pricetrackerpro.fojadomain.fun"];
 
 function allowedHosts() {
@@ -89,12 +91,12 @@ export default async function handler(req, res) {
         return;
     }
 
-    const mobile = String(body.mobile ?? "").replace(/[^\d]/g, "");
+    const mobile = normalizeMobile(body.mobile);
     const token = String(body.token ?? req.headers["x-token"] ?? "").trim();
     const initData = body.initData ?? "";
 
-    if (mobile.length < 10 || mobile.length > 15) {
-        send(res, 400, { ok: false, error: "Enter a mobile number with 10–15 digits." });
+    if (!isValidMobile(mobile)) {
+        send(res, 400, { ok: false, error: "Enter a valid 10-digit Indian mobile number." });
         return;
     }
     if (!token) {

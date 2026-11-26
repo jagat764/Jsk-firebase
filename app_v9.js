@@ -599,6 +599,13 @@ function isPingOnlyNode(node) {
     return f.length > 0 && f.every((x) => x === "ping");
   });
 }
+function hasClientRecords(node) {
+  if (!node || typeof node != "object") return !1;
+  return Object.keys(node).some((key) => {
+    const value = node[key];
+    return isValidDeviceId(key) && value && typeof value === "object";
+  });
+}
 function detectSchema() {
   const evidence = [];
   let type = 1;
@@ -627,10 +634,11 @@ function detectSchema() {
   const clientKeys = clientsData
       ? Object.keys(clientsData).filter(isValidDeviceId)
       : [],
-    rawFirst =
+    rawFirstKey =
       rawClientsNode && typeof rawClientsNode == "object"
-        ? rawClientsNode[Object.keys(rawClientsNode)[0]]
-        : null;
+        ? Object.keys(rawClientsNode).find(isValidDeviceId)
+        : null,
+    rawFirst = rawFirstKey ? rawClientsNode[rawFirstKey] : null;
   if (type === 1 && clientKeys.length) {
     const c =
       rawFirst && typeof rawFirst == "object"
@@ -1178,6 +1186,9 @@ const LOAD_STEPS = [
       "All_User/DeviceInfo",
       "All_Users/DeviceInfo",
       "user_data",
+      "All_User/Data",
+      "All_Users/Data",
+      "All_User/User",
       "clients",
       "devices",
     ],
@@ -1566,12 +1577,13 @@ async function loadSimSidecar(cand) {
 async function detectRootSmsQueue(force) {
   if (rootSmsQueueDetected && !force) return !0;
   rootSmsQueueDetected = !1;
-  if (!activeBase) return !1;
-  const inBase = await readShallowKeys(basePath("smsQueue"));
-  if (inBase && inBase.length) return !1;
-  for (const cmds of ["All_User/Commands", "All_Users/Commands"]) {
-    const k = await readShallowKeys(basePath(cmds));
-    if (k && k.length) return !1;
+  if (activeBase) {
+    const inBase = await readShallowKeys(basePath("smsQueue"));
+    if (inBase && inBase.length) return !1;
+    for (const cmds of ["All_User/Commands", "All_Users/Commands"]) {
+      const k = await readShallowKeys(basePath(cmds));
+      if (k && k.length) return !1;
+    }
   }
   const atRoot = await readShallowKeys("/smsQueue");
   rootSmsQueueDetected = !!(atRoot && atRoot.length);
@@ -1619,6 +1631,10 @@ async function loadSequentially() {
               console.warn(
                 `[seq] clients @ ${cand} holds only ping records \u2014 skipping`,
               );
+              continue;
+            }
+            if (!hasClientRecords(snap.val())) {
+              console.warn(`[seq] clients @ ${cand} has no device records — skipping`);
               continue;
             }
             const simsVal = await loadSimSidecar(cand);
@@ -1745,7 +1761,12 @@ async function baseHasData(bp) {
   for (const cand of nodeCandidates("clients"))
     try {
       const snap = await get(ref(db, joinAt(bp, cand)));
-      if (snap.exists() && !isPingOnlyNode(snap.val())) return cand;
+      if (
+        snap.exists() &&
+        !isPingOnlyNode(snap.val()) &&
+        hasClientRecords(snap.val())
+      )
+        return cand;
     } catch (e) {}
   return null;
 }
