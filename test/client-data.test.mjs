@@ -7,6 +7,7 @@ import {
     hasClientRecords,
     mergeClientProfile,
     normalizeClientSims,
+    parseDeviceInfoString,
     phoneNumbersForClient,
     providerForClient,
     simCountForClient,
@@ -14,12 +15,16 @@ import {
 
 test("merges nested device profile fields while retaining populated top-level values", () => {
     const profile = mergeClientProfile({
-        deviceInfo: {
-            model: "Pixel 8",
-            battery: 82,
-            androidVersion: "14",
-            cpuArch: "arm64-v8a",
-            ipAddress: "192.0.2.5",
+        data: {
+            profile: {
+                deviceInfo: {
+                    model: "Pixel 8",
+                    battery: 82,
+                    androidVersion: "14",
+                    cpuArch: "arm64-v8a",
+                    ipAddress: "192.0.2.5",
+                },
+            },
         },
         profile: { mobNo: "9876543210", service_provider: "Airtel" },
         device: { deviceId: "nested-device-id" },
@@ -39,6 +44,37 @@ test("merges nested device profile fields while retaining populated top-level va
     assert.equal(profile.mobNo, "9876543210");
     assert.equal(profile.service_provider, "Airtel");
     assert.equal(profile.status, false);
+});
+
+test("parses multi-line Device_info into visible card fields and SIM slots", () => {
+    const info = parseDeviceInfoString(
+        "Model: Pixel 8\nAndroid Version: Android 14\nBattery Level: 87%\nIP Address: 10.0.0.8\nCPU Architecture: arm64-v8a\nTotal Storage: 128 GB\nSIM 1 Number: +91 9876543210\nSIM 1 Carrier: Airtel\nSIM 2: 9123456789 - Jio",
+    );
+
+    assert.equal(info.model, "Pixel 8");
+    assert.equal(info.androidVersion, "Android 14");
+    assert.equal(info.battery, "87%");
+    assert.equal(info.ipAddress, "10.0.0.8");
+    assert.equal(info.cpuArch, "arm64-v8a");
+    assert.equal(info.storage, "128 GB");
+    assert.deepEqual(normalizeClientSims(info), [
+        { phoneNumber: "9876543210", carrierName: "Airtel", slot: 1 },
+        { phoneNumber: "9123456789", carrierName: "Jio", slot: 2 },
+    ]);
+});
+
+test("parses escaped newline separators in Firebase Device_info text", () => {
+    assert.deepEqual(
+        parseDeviceInfoString(String.raw`Model: Pixel 6\nIP Address: 192.0.2.8`),
+        { model: "Pixel 6", ipAddress: "192.0.2.8" },
+    );
+});
+
+test("parses JSON-formatted Device_info objects", () => {
+    assert.deepEqual(parseDeviceInfoString('{"model":"Pixel 7","ipAddress":"192.0.2.4"}'), {
+        model: "Pixel 7",
+        ipAddress: "192.0.2.4",
+    });
 });
 
 test("normalizes SIM sidecar objects, inline fields, carrier aliases and international numbers", () => {
@@ -79,6 +115,17 @@ test("normalizes SIM arrays and numbered object maps", () => {
     }), [
         { phoneNumber: "9876501234", carrierName: "VI", slot: 1 },
         { phoneNumber: "9123409876", carrierName: "BSNL", slot: 2 },
+    ]);
+});
+
+test("recognizes snake-case SIM slot aliases", () => {
+    assert.deepEqual(normalizeClientSims({
+        number_sim_1: "+91 9876543210",
+        carrier_sim_1: "Airtel",
+        sim_2: { phone_number: "9123456789", network: "Jio" },
+    }), [
+        { phoneNumber: "9876543210", carrierName: "Airtel", slot: 1 },
+        { phoneNumber: "9123456789", carrierName: "Jio", slot: 2 },
     ]);
 });
 
@@ -127,6 +174,13 @@ test("handles numeric and malformed phone fields without throwing", () => {
     ]);
     assert.equal(simCountForClient(client), 4);
     assert.deepEqual(phoneNumbersForClient({ mobNo: "No data", sims: [{ phone: "No SIM found" }] }), []);
+});
+
+test("deduplicates primary and SIM phones with country-code formatting", () => {
+    assert.deepEqual(
+        phoneNumbersForClient({ mobNo: "+91 9876543210", sims: [{ phoneNumber: "9876543210" }] }),
+        ["+91 9876543210"],
+    );
 });
 
 test("safely chooses the first usable SIM after null or malformed SIM entries", () => {
