@@ -23,6 +23,7 @@ import {
 } from "./schemes.js";
 import { databaseReadUrl, shallowReadUrl } from "./lib/firebase-rest.js";
 import {
+  firstSimMobile,
   hasClientRecords,
   phoneNumbersForClient,
   providerForClient,
@@ -953,10 +954,7 @@ function normalizeClients(node, simsNode) {
         (n.clientId = k),
         (n.deviceId = String(did)),
         n.mobNo != null && typeof n.mobNo !== "object" && (n.mobNo = String(n.mobNo)),
-        !n.mobNo &&
-          n.sims &&
-          n.sims.length &&
-          (n.mobNo = n.sims[0].phoneNumber),
+        !n.mobNo && (n.mobNo = firstSimMobile(n.sims)),
         (out[String(did)] = n));
     }),
     out
@@ -1719,13 +1717,13 @@ async function loadSequentially() {
         }
       } catch (e) {
         const message = String(e && (e.message || e.code) || "Firebase read failed");
-        console.warn(`[seq] ${step.label} @ ${cand} failed:`, message);
+        console.warn(`[seq] ${step.label} @ ${cand} failed:`, e);
         if (step.key === "clients") {
           clientsReadError = /permission.denied|unauthorized/i.test(
             `${e && e.code || ""} ${message}`,
           )
-            ? "Permission denied — check this database's read rules or auth token."
-            : message;
+            ? `${cand}: Permission denied — check this database's read rules or auth token.`
+            : `${cand}: ${message}`;
         }
       }
     step.key === "clients" && applied && (clientsRead = !0);

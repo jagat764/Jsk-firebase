@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+    firstSimMobile,
     hasClientRecords,
     phoneNumbersForClient,
     providerForClient,
@@ -32,6 +33,12 @@ test("handles numeric and malformed phone fields without throwing", () => {
         "9876509999",
     ]);
     assert.equal(simCountForClient(client), 3);
+});
+
+test("safely chooses the first usable SIM after null or malformed SIM entries", () => {
+    assert.equal(firstSimMobile([null, {}, { phoneNumber: 9123456789 }]), "9123456789");
+    assert.equal(firstSimMobile([null, { phoneNumber: "Unknown" }]), "");
+    assert.equal(firstSimMobile(null), "");
 });
 
 test("falls back to SIM carrier names when provider has a non-text value", () => {
