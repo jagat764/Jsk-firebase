@@ -12,6 +12,7 @@
 import {
   checkMobile,
   flattenResult,
+  isValidMobile,
   normalizeMobile,
   DEFAULT_LOOKUP_ENDPOINT,
 } from "./lib/lookup.js";
@@ -75,7 +76,7 @@ function phoneFromCard(card) {
   const any = text.match(/(?:\+?91[\s-]?)?([6-9]\d{9})/);
   const raw = (chip && chip[1]) || (any && any[1]) || "";
   const digits = normalizeMobile(raw);
-  return digits.length >= 10 && digits.length <= 15 ? digits : "";
+  return isValidMobile(digits) ? digits : "";
 }
 
 function decorateCards() {

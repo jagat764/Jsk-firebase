@@ -6,9 +6,30 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { checkMobile, LookupError } from "../lib/lookup.js";
+import {
+    checkMobile,
+    isValidMobile,
+    LookupError,
+    normalizeMobile,
+} from "../lib/lookup.js";
 
 const ENDPOINT = "https://pricetrackerpro.fojadomain.fun/api/sw/check-mobile";
+
+test("normalizes Indian dialing prefixes and validates exactly 10 mobile digits", () => {
+    for (const input of [
+        "9876543210",
+        "+91 98765-43210",
+        "91 98765 43210",
+        "09876543210",
+        "0 91 98765 43210",
+    ]) {
+        assert.equal(normalizeMobile(input), "9876543210");
+        assert.equal(isValidMobile(input), true);
+    }
+    for (const input of ["1234567890", "987654321", "9198765432100", "abc"]) {
+        assert.equal(isValidMobile(input), false);
+    }
+});
 
 test("falls back to the proxy when the direct call is blocked", async () => {
     const calls = [];

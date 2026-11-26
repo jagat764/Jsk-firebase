@@ -79,7 +79,11 @@ test("validates the mobile number and token before calling upstream", async () =
     const res = mockRes();
     await handler(req({ endpoint: ALLOWED, mobile: "123", token: "t" }), res);
     assert.equal(res.statusCode, 400);
-    assert.match(res.json().error, /10–15 digits/);
+    assert.match(res.json().error, /10-digit Indian/);
+
+    const invalidIndianNumber = mockRes();
+    await handler(req({ endpoint: ALLOWED, mobile: "1234567890", token: "t" }), invalidIndianNumber);
+    assert.equal(invalidIndianNumber.statusCode, 400);
 
     const res2 = mockRes();
     await handler(req({ endpoint: ALLOWED, mobile: "9876543210", token: "" }), res2);
@@ -107,7 +111,7 @@ test("forwards an allowed request and wraps the upstream result", async () => {
         assert.equal(calls[0].init.method, "POST");
         assert.equal(calls[0].init.headers["x-token"], "secret");
         assert.deepEqual(JSON.parse(calls[0].init.body), {
-            mobile: "919876543210",
+            mobile: "9876543210",
             token: "secret",
             initData: "",
         });
